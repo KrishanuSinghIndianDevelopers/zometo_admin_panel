@@ -2,167 +2,256 @@
 
 import React, { useEffect, useState } from 'react';
 import { db } from '../../firebase/firebase';
-import {
-  collection,
-  getDocs,
-  doc,
-  deleteDoc,
-  query,
-  orderBy,
-  where,
-} from 'firebase/firestore';
+import { collection, getDocs, doc, deleteDoc } from 'firebase/firestore';
 import Sidebar from '../../components/Sidebar';
 import BootstrapClient from '../../components/BootstrapClient';
 import { 
-  PlusCircle, 
-  Edit, 
-  Trash2, 
-  Eye,
-  ArrowLeft,
-  MoreHorizontal,
-  Carrot,
-  Beef,
-  Package,
-  EyeOff,
-  FolderOpen
+  PlusCircle, Edit, Trash2, Eye, MoreHorizontal, Package, Filter,
+  ChevronRight, Folder
 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function CategoriesPage() {
   const [categories, setCategories] = useState([]);
   const [mainCategories, setMainCategories] = useState([]);
+  const [filteredCategories, setFilteredCategories] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [deleteLoading, setDeleteLoading] = useState(false);
-  const [categoryToDelete, setCategoryToDelete] = useState(null);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [user, setUser] = useState(null);
+  const [activeDropdown, setActiveDropdown] = useState(null);
+  const [vendorFilter, setVendorFilter] = useState('all');
+  const [uniqueVendors, setUniqueVendors] = useState([]);
 
-  const foodTypes = [
-    { value: 'veg', label: 'Vegetarian', color: 'success', icon: Carrot },
-    { value: 'non-veg', label: 'Non-Vegetarian', color: 'danger', icon: Beef }
-  ];
+  const router = useRouter();
 
   useEffect(() => {
-    fetchCategories();
+    checkAuthAndFetchCategories();
+    
+    const handleClickOutside = (event) => {
+      if (!event.target.closest('.dropdown-container')) {
+        setActiveDropdown(null);
+      }
+    };
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
   }, []);
 
-  const fetchCategories = async () => {
+  useEffect(() => {
+    applyVendorFilter();
+  }, [vendorFilter, mainCategories]);
+
+  const checkAuthAndFetchCategories = async () => {
     try {
       setLoading(true);
-      // Fetch all categories first
-      const q = query(collection(db, 'categories'), orderBy('timestamp', 'desc'));
-      const querySnapshot = await getDocs(q);
-      const fetchedData = querySnapshot.docs.map((doc) => ({
+      const userData = localStorage.getItem('user');
+      if (!userData) {
+        router.push('/login');
+        return;
+      }
+      const userObj = JSON.parse(userData);
+      setUser(userObj);
+      await fetchCategories(userObj);
+    } catch (error) {
+      alert('Authentication error. Please login again.');
+      router.push('/login');
+    }
+  };
+
+  const fetchCategories = async (userObj) => {
+    try {
+      const allCategoriesSnapshot = await getDocs(collection(db, 'categories'));
+      const allCategories = allCategoriesSnapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       }));
-      
-      setCategories(fetchedData);
-      
-      // Filter only main categories for display
-      const mainCats = fetchedData.filter(cat => cat.isMainCategory);
+
+      const isAdminUser = userObj.role === 'admin' || userObj.role === 'main_admin';
+      let mainCats = [];
+
+      if (isAdminUser) {
+        // ADMIN: Show ALL categories including own
+        mainCats = allCategories.filter(cat => {
+          const hasNoParent = !cat.parentCategory || cat.parentCategory === '';
+          return hasNoParent;
+        });
+        
+        const vendors = [...new Set(mainCats.map(cat => cat.vendorId).filter(Boolean))];
+        setUniqueVendors(vendors);
+      } else {
+        // VENDOR: Show only own categories
+        const vendorUid = userObj.documentId || userObj.uid;
+        mainCats = allCategories.filter(cat => {
+          const isVendorCategory = cat.vendorId === vendorUid;
+          const hasNoParent = !cat.parentCategory || cat.parentCategory === '';
+          return isVendorCategory && hasNoParent;
+        });
+      }
+
+      setCategories(allCategories);
       setMainCategories(mainCats);
+      setFilteredCategories(mainCats);
     } catch (error) {
       console.error('Error fetching categories:', error);
-      alert('Failed to fetch categories');
+      alert('Failed to fetch categories.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Count subcategories for each main category
+  const applyVendorFilter = () => {
+    if (vendorFilter === 'all') {
+      setFilteredCategories(mainCategories);
+    } else if (vendorFilter === 'admin') {
+      const adminCategories = mainCategories.filter(cat => cat.vendorId === 'admin');
+      setFilteredCategories(adminCategories);
+    } else {
+      const vendorCategories = mainCategories.filter(cat => cat.vendorId === vendorFilter);
+      setFilteredCategories(vendorCategories);
+    }
+  };
+
   const getSubcategoryCount = (categoryId) => {
     return categories.filter(cat => cat.parentCategory === categoryId).length;
   };
 
-  const handleDeleteClick = (category) => {
-    setCategoryToDelete(category);
-    setShowDeleteDialog(true);
+  const canModifyCategory = (category) => {
+    if (!user) return false;
+    if (user.role === 'admin' || user.role === 'main_admin') return true;
+    const vendorUid = user.documentId || user.uid;
+    return category.vendorId === vendorUid;
   };
 
-  const handleConfirmDelete = async () => {
-    if (!categoryToDelete) return;
-
-    setDeleteLoading(true);
-    try {
-      // Check if main category has subcategories
-      const hasSubcategories = getSubcategoryCount(categoryToDelete.id) > 0;
-      if (hasSubcategories) {
-        alert('Cannot delete main category with existing subcategories. Please delete subcategories first.');
-        setShowDeleteDialog(false);
-        setCategoryToDelete(null);
+  const handleDeleteClick = (category) => {
+    const subcategoryCount = getSubcategoryCount(category.id);
+    if (subcategoryCount > 0) {
+      if (!window.confirm(`This category has ${subcategoryCount} subcategories. Deleting it will also remove all subcategories. Are you sure?`)) {
         return;
       }
-
-      await deleteDoc(doc(db, 'categories', categoryToDelete.id));
-      alert('Category deleted successfully!');
-      fetchCategories();
-    } catch (error) {
-      console.error('Error deleting category:', error);
-      alert('Delete failed! Please try again.');
-    } finally {
-      setDeleteLoading(false);
-      setShowDeleteDialog(false);
-      setCategoryToDelete(null);
+    } else {
+      if (!window.confirm(`Delete "${category.name}"?`)) return;
     }
-  };
-
-  const handleCancelDelete = () => {
-    setShowDeleteDialog(false);
-    setCategoryToDelete(null);
-  };
-
-  const getFoodTypeBadge = (category) => {
-    const typeConfig = foodTypes.find(t => t.value === category.foodType) || foodTypes[0];
-    const Icon = typeConfig.icon;
     
-    return (
-      <span className={`badge bg-${typeConfig.color} bg-opacity-10 text-${typeConfig.color} border border-${typeConfig.color} border-opacity-25 d-flex align-items-center gap-1`}>
-        <Icon size={12} />
-        {typeConfig.label}
-      </span>
-    );
+    deleteDoc(doc(db, 'categories', category.id))
+      .then(() => {
+        alert('Category deleted successfully!');
+        fetchCategories(user);
+      })
+      .catch((error) => {
+        console.error('Delete error:', error);
+        alert('Delete failed!');
+      });
   };
+
+  const toggleDropdown = (categoryId, e) => {
+    e?.stopPropagation();
+    setActiveDropdown(activeDropdown === categoryId ? null : categoryId);
+  };
+
+  const getVendorDisplayName = (vendorId) => {
+    if (vendorId === 'admin') return 'Admin Categories';
+    
+    const vendorCategory = mainCategories.find(cat => cat.vendorId === vendorId);
+    if (vendorCategory?.vendorName) {
+      return vendorCategory.vendorName;
+    }
+    
+    return `Vendor: ${vendorId.substring(0, 10)}...`;
+  };
+
+  if (loading) {
+    return (
+      <div className="d-flex min-vh-100">
+        <Sidebar />
+        <div className="flex-grow-1 bg-light d-flex align-items-center justify-content-center">
+          <div className="text-center">
+            <div className="spinner-border text-primary mb-3"></div>
+            <p className="text-muted">Loading categories...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isAdminUser = user?.role === 'admin' || user?.role === 'main_admin';
 
   return (
-    <div className="d-flex" style={{ minHeight: '100vh' }}>
+    <div className="d-flex min-vh-100">
       <Sidebar />
       <BootstrapClient />
       
       <div className="flex-grow-1 bg-light">
-        {/* Header */}
-        <div className="p-4 border-bottom bg-white">
-          <div className="d-flex justify-content-between align-items-center mb-3">
-            <div className="d-flex align-items-center gap-3">
-              <Link
-                href="/products"
-                className="btn btn-outline-secondary btn-sm d-flex align-items-center gap-2"
-              >
-                <ArrowLeft size={16} />
-                Back to Products
-              </Link>
-              <div>
-                <h2 className="fw-bold text-dark mb-1">Main Categories Management</h2>
-                <p className="text-muted mb-0">Manage your main food categories</p>
-              </div>
+        {/* Fixed Header Section with Blue Background */}
+        <div className="p-4 mb-2 border-bottom" style={{backgroundColor: '#e3f2fd', borderBottom: '2px solid #bbdefb'}}>
+          <div className="d-flex justify-content-between align-items-center">
+            <div>
+              <h2 className="fw-bold text-dark mb-1">Main Categories Management</h2>
+              <p className="text-muted mb-0">
+                {isAdminUser ? 'Manage all categories' : 'Manage your categories'}
+              </p>
             </div>
             
             <div className="text-end">
-              <div className="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 px-3 py-2 me-3">
+              <div className={`badge ${isAdminUser ? 'bg-warning' : 'bg-primary'} bg-opacity-10 ${isAdminUser ? 'text-warning' : 'text-primary'} border px-3 py-2 me-3`}>
                 <Package size={16} className="me-1" />
-                {mainCategories.length} Main Categories
+                {filteredCategories.length} {isAdminUser ? 'Total' : 'My'} Categories
               </div>
-              <Link
-                href="/categories/create"
-                className="btn btn-primary d-flex align-items-center gap-2"
-              >
+              <Link href="/categories/create" className="btn btn-primary d-flex align-items-center gap-2">
                 <PlusCircle size={18} />
-                Add Main Category
+                Add Category
               </Link>
             </div>
           </div>
+
+          {isAdminUser && (
+            <div className="mt-3">
+              <div className="card border-0 shadow-sm">
+                <div className="card-body py-3">
+                  <div className="row align-items-center">
+                    <div className="col-md-6">
+                      <div className="d-flex align-items-center gap-3">
+                        <div className="bg-primary rounded-circle p-2">
+                          <Filter size={18} className="text-white" />
+                        </div>
+                        <div>
+                          <h6 className="fw-bold text-dark mb-0">Vendor Filter</h6>
+                          <small className="text-muted">
+                            {filteredCategories.length} of {mainCategories.length} categories showing
+                          </small>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="col-md-6">
+                      <div className="d-flex align-items-center gap-3">
+                        <select 
+                          className="form-select form-select-sm border-primary"
+                          value={vendorFilter}
+                          onChange={(e) => setVendorFilter(e.target.value)}
+                          style={{minWidth: '200px'}}
+                        >
+                          <option value="all">All Vendors ({mainCategories.length})</option>
+                          <option value="admin">Admin ({mainCategories.filter(cat => cat.vendorId === 'admin').length})</option>
+                          {uniqueVendors.filter(vendor => vendor !== 'admin').map(vendor => (
+                            <option key={vendor} value={vendor}>
+                              {getVendorDisplayName(vendor)} ({mainCategories.filter(cat => cat.vendorId === vendor).length})
+                            </option>
+                          ))}
+                        </select>
+                        
+                        <div className="bg-white rounded px-3 py-2 border">
+                          <small className="text-primary fw-bold">{filteredCategories.length}</small>
+                          <small className="text-muted"> showing</small>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
         </div>
 
-        {/* Categories Table */}
         <div className="p-4">
           <div className="card border-0 shadow-sm">
             <div className="card-body p-0">
@@ -170,202 +259,152 @@ export default function CategoriesPage() {
                 <table className="table table-hover align-middle mb-0">
                   <thead className="table-light">
                     <tr>
-                      <th className="ps-4 py-3 fw-semibold text-dark">Image</th>
-                      <th className="py-3 fw-semibold text-dark">Name</th>
-                      <th className="py-3 fw-semibold text-dark">Food Type</th>
-                      <th className="py-3 fw-semibold text-dark">Subcategories</th>
-                      <th className="py-3 fw-semibold text-dark">Is Last</th>
-                      <th className="py-3 fw-semibold text-dark">View Subcategories</th>
-                      <th className="pe-4 py-3 fw-semibold text-dark text-center">Actions</th>
+                      <th className="ps-4 py-3">Image</th>
+                      <th className="py-3">Name</th>
+                      {isAdminUser && <th className="py-3">Vendor</th>}
+                      <th className="py-3">Food Type</th>
+                      <th className="py-3">Subcategories</th>
+                      <th className="py-3">Is Last</th>
+                      <th className="py-3">Actions</th>
+                      <th className="pe-4 py-3 text-center">Menu</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {loading ? (
+                    {filteredCategories.length === 0 ? (
                       <tr>
-                        <td colSpan="7" className="text-center py-5">
-                          <div className="spinner-border text-primary" role="status">
-                            <span className="visually-hidden">Loading...</span>
-                          </div>
-                          <p className="mt-3 text-muted">Loading categories...</p>
-                        </td>
-                      </tr>
-                    ) : mainCategories.length === 0 ? (
-                      <tr>
-                        <td colSpan="7" className="text-center py-5">
+                        <td colSpan={isAdminUser ? 8 : 7} className="text-center py-5">
                           <div className="text-muted">
                             <Package size={48} className="mb-3 opacity-50" />
-                            <h5 className="fw-semibold">No main categories found</h5>
-                            <p className="mb-4">Get started by creating your first main category</p>
-                            <Link
-                              href="/categories/create"
-                              className="btn btn-primary"
-                            >
+                            <h5 className="fw-semibold">No categories found</h5>
+                            <Link href="/categories/create" className="btn btn-primary">
                               <PlusCircle size={18} className="me-2" />
-                              Create First Main Category
+                              Create First Category
                             </Link>
                           </div>
                         </td>
                       </tr>
                     ) : (
-                      mainCategories.map((category) => {
+                      filteredCategories.map((category) => {
                         const subcategoryCount = getSubcategoryCount(category.id);
-                        const canViewSubcategories = !category.isLast && subcategoryCount > 0;
+                        const canViewSubcategories = !category.isLast || subcategoryCount > 0;
+                        const userCanModify = canModifyCategory(category);
                         
                         return (
                           <tr key={category.id} className="border-top">
-                            {/* Image */}
                             <td className="ps-4">
                               {category.imageUrl ? (
-                                <img
-                                  src={category.imageUrl}
-                                  alt={category.name}
-                                  className="rounded-circle"
-                                  style={{
-                                    width: '60px',
-                                    height: '60px',
-                                    objectFit: 'cover'
-                                  }}
-                                />
+                                <img src={category.imageUrl} alt={category.name} className="rounded-circle" style={{width: '60px', height: '60px', objectFit: 'cover'}} />
                               ) : (
-                                <div className="rounded-circle bg-light d-flex align-items-center justify-content-center"
-                                  style={{
-                                    width: '60px',
-                                    height: '60px'
-                                  }}
-                                >
+                                <div className="rounded-circle bg-light d-flex align-items-center justify-content-center" style={{width: '60px', height: '60px'}}>
                                   <Package size={24} className="text-muted" />
                                 </div>
                               )}
                             </td>
 
-                            {/* Name */}
                             <td>
-                              <div>
-                                <h6 className="fw-semibold mb-1 text-dark">{category.name}</h6>
-                                {category.isLast && (
-                                  <span className="text-xs text-danger ml-2">(Final Level)</span>
+                              <h6 className="fw-semibold mb-1 text-dark">{category.name}</h6>
+                              <small className="text-muted">Main Category</small>
+                            </td>
+
+                            {isAdminUser && (
+                              <td>
+                                <small className="text-muted">
+                                  {getVendorDisplayName(category.vendorId)}
+                                </small>
+                              </td>
+                            )}
+
+                            <td>
+                              <span className={`badge ${category.foodType === 'veg' ? 'bg-success' : 'bg-danger'} bg-opacity-10 ${category.foodType === 'veg' ? 'text-success' : 'text-danger'} border`}>
+                                {category.foodType === 'veg' ? 'Vegetarian' : 'Non-Vegetarian'}
+                              </span>
+                            </td>
+
+                            <td>
+                              <div className="d-flex align-items-center gap-2">
+                                <span className="fw-semibold text-dark">{subcategoryCount}</span>
+                                <small className="text-muted">subcategories</small>
+                                {canViewSubcategories && (
+                                  <ChevronRight size={16} className="text-muted" />
                                 )}
                               </div>
                             </td>
 
-                            {/* Food Type */}
                             <td>
-                              {getFoodTypeBadge(category)}
+                              <span className={`badge ${category.isLast ? 'bg-success' : 'bg-secondary'}`}>
+                                {category.isLast ? 'Yes' : 'No'}
+                              </span>
                             </td>
 
-                            {/* Subcategories Count */}
-                            <td>
-                              <div className="d-flex align-items-center gap-2">
-                                <FolderOpen size={16} className="text-primary" />
-                                <span className="fw-semibold text-dark">{subcategoryCount}</span>
-                                <small className="text-muted">subcategories</small>
-                              </div>
-                            </td>
-
-                            {/* Is Last */}
-                            <td>
-                              {category.isLast ? (
-                                <span className="badge bg-success">Yes</span>
-                              ) : (
-                                <span className="badge bg-secondary">No</span>
-                              )}
-                            </td>
-
-                            {/* View Subcategories */}
                             <td>
                               {canViewSubcategories ? (
                                 <Link 
-                                  href={`/categories/${category.id}`}
-                                  className="btn btn-outline-primary btn-sm d-flex align-items-center gap-2"
+                                  href={`/categories/${category.id}`} 
+                                  className="btn btn-outline-primary btn-sm d-flex align-items-center gap-1"
                                 >
-                                  <Eye size={14} />
+                                  <Folder size={14} />
                                   View Subcategories
                                 </Link>
-                              ) : category.isLast ? (
-                                <span className="text-muted small d-flex align-items-center gap-2">
-                                  <EyeOff size={14} />
-                                  Final Level
-                                </span>
                               ) : (
-                                <Link 
-                                  href={`/categories/create?parentId=${category.id}`}
-                                  className="btn btn-outline-success btn-sm d-flex align-items-center gap-2"
-                                >
-                                  <PlusCircle size={14} />
-                                  Add Subcategory
-                                </Link>
+                                <span className="text-muted small">Final Level</span>
                               )}
                             </td>
 
-                            {/* Actions */}
                             <td className="pe-4 text-center">
-                              <div className="dropdown">
+                              <div className="dropdown-container position-relative">
                                 <button
-                                  className="btn btn-sm btn-outline-secondary border-0 dropdown-toggle"
-                                  type="button"
-                                  id={`dropdownMenuButton-${category.id}`}
-                                  data-bs-toggle="dropdown"
-                                  aria-expanded="false"
-                                  data-bs-auto-close="true"
+                                  className="btn btn-sm btn-outline-secondary border-0 rounded-circle"
+                                  onClick={(e) => toggleDropdown(category.id, e)}
+                                  style={{ width: '32px', height: '32px' }}
+                                  disabled={!userCanModify}
                                 >
                                   <MoreHorizontal size={16} />
                                 </button>
-                                <ul 
-                                  className="dropdown-menu dropdown-menu-end"
-                                  aria-labelledby={`dropdownMenuButton-${category.id}`}
-                                >
-                                  <li>
+                                
+                                {activeDropdown === category.id && (
+                                  <div className="dropdown-menu show position-absolute end-0 mt-1" style={{zIndex: 9999, minWidth: '200px'}}>
                                     <Link 
-                                      href={`/categories/edit/${category.id}`}
-                                      className="dropdown-item d-flex align-items-center gap-2"
+                                      href={`/categories/edit/${category.id}`} 
+                                      className="dropdown-item py-2 d-flex align-items-center gap-2"
+                                      onClick={() => setActiveDropdown(null)}
                                     >
-                                      <Edit size={14} className="text-success" />
-                                      Edit
+                                      <Edit size={16} />
+                                      Edit Category
                                     </Link>
-                                  </li>
-
-                                  {canViewSubcategories && (
-                                    <li>
+                                    
+                                    {canViewSubcategories && (
                                       <Link 
-                                        href={`/categories/${category.id}`}
-                                        className="dropdown-item d-flex align-items-center gap-2"
+                                        href={`/categories/${category.id}`} 
+                                        className="dropdown-item py-2 d-flex align-items-center gap-2"
+                                        onClick={() => setActiveDropdown(null)}
                                       >
-                                        <Eye size={14} className="text-primary" />
+                                        <Eye size={16} />
                                         View Subcategories
                                       </Link>
-                                    </li>
-                                  )}
-
-                                  {!category.isLast && subcategoryCount === 0 && (
-                                    <li>
+                                    )}
+                                    
+                                    {!category.isLast && (
                                       <Link 
-                                        href={`/categories/create?parentId=${category.id}`}
-                                        className="dropdown-item d-flex align-items-center gap-2"
+                                        href={`/categories/create?parent=${category.id}`} 
+                                        className="dropdown-item py-2 d-flex align-items-center gap-2"
+                                        onClick={() => setActiveDropdown(null)}
                                       >
-                                        <PlusCircle size={14} className="text-info" />
+                                        <PlusCircle size={16} />
                                         Add Subcategory
                                       </Link>
-                                    </li>
-                                  )}
-
-                                  <li><hr className="dropdown-divider" /></li>
-                                  
-                                  <li>
-                                    <button
-                                      className="dropdown-item d-flex align-items-center gap-2 text-danger"
+                                    )}
+                                    
+                                    <hr className="my-1" />
+                                    
+                                    <button 
+                                      className="dropdown-item py-2 text-danger d-flex align-items-center gap-2" 
                                       onClick={() => handleDeleteClick(category)}
-                                      disabled={subcategoryCount > 0}
                                     >
-                                      <Trash2 size={14} />
-                                      Delete
-                                      {subcategoryCount > 0 && (
-                                        <small className="text-muted ms-1">
-                                          ({subcategoryCount} subcategories)
-                                        </small>
-                                      )}
+                                      <Trash2 size={16} />
+                                      Delete Category
                                     </button>
-                                  </li>
-                                </ul>
+                                  </div>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -379,63 +418,6 @@ export default function CategoriesPage() {
           </div>
         </div>
       </div>
-
-      {/* Delete Confirmation Modal */}
-      {showDeleteDialog && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} tabIndex="-1">
-          <div className="modal-dialog">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h5 className="modal-title fw-semibold">Confirm Delete</h5>
-                <button
-                  type="button"
-                  className="btn-close"
-                  onClick={handleCancelDelete}
-                ></button>
-              </div>
-              <div className="modal-body">
-                <p>
-                  Are you sure you want to delete the category <strong>"{categoryToDelete?.name}"</strong>?
-                  This action cannot be undone.
-                </p>
-                {getSubcategoryCount(categoryToDelete?.id) > 0 && (
-                  <div className="alert alert-warning mt-3">
-                    <strong>Warning:</strong> This category has {getSubcategoryCount(categoryToDelete?.id)} subcategories. 
-                    You must delete all subcategories first.
-                  </div>
-                )}
-              </div>
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-outline-secondary"
-                  onClick={handleCancelDelete}
-                  disabled={deleteLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  onClick={handleConfirmDelete}
-                  disabled={deleteLoading || getSubcategoryCount(categoryToDelete?.id) > 0}
-                >
-                  {deleteLoading ? (
-                    <>
-                      <div className="spinner-border spinner-border-sm me-2" role="status">
-                        <span className="visually-hidden">Loading...</span>
-                      </div>
-                      Deleting...
-                    </>
-                  ) : (
-                    'Delete'
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,23 +1,28 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import Sidebar from '../../../components/Sidebar';
-import { db } from '../../../firebase/firebase';
+import { useRouter, useParams } from 'next/navigation';
+import Sidebar from '../../../../components/Sidebar';
+import { db } from '../../../../firebase/firebase';
 import { 
   collection, 
-  addDoc, 
+  doc, 
+  getDoc, 
+  updateDoc,
   Timestamp,
   getDocs 
 } from 'firebase/firestore';
 import { ArrowLeft, Save } from 'lucide-react';
 
-export default function CreateCoupon() {
+export default function EditCouponPage() {
   const router = useRouter();
+  const params = useParams();
   const [loading, setLoading] = useState(false);
+  const [fetchLoading, setFetchLoading] = useState(true);
   const [categories, setCategories] = useState([]);
   const [subCategories, setSubCategories] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
+  const [coupon, setCoupon] = useState(null);
 
   // Form states
   const [code, setCode] = useState('');
@@ -29,11 +34,18 @@ export default function CreateCoupon() {
   const [expiryDate, setExpiryDate] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedSubCategory, setSelectedSubCategory] = useState('all');
+  const [isActive, setIsActive] = useState(true);
+
+  const couponId = params.id;
+
+  console.log('🆔 Coupon ID from params:', couponId);
 
   // Check authentication and fetch data
   useEffect(() => {
-    checkAuthAndFetchData();
-  }, []);
+    if (couponId) {
+      checkAuthAndFetchData();
+    }
+  }, [couponId]);
 
   useEffect(() => {
     if (selectedCategory && selectedCategory !== 'all') {
@@ -55,10 +67,89 @@ export default function CreateCoupon() {
 
     const userObj = JSON.parse(userData);
     setCurrentUser(userObj);
-    fetchCategories(userObj);
+    fetchCouponAndCategories(userObj);
   };
 
-  const fetchCategories = async (userObj) => {
+  const fetchCouponAndCategories = async (userObj) => {
+    try {
+      setFetchLoading(true);
+      
+      console.log('📥 Fetching coupon with ID:', couponId);
+      
+      // Fetch coupon data
+      const couponDoc = await getDoc(doc(db, 'coupons', couponId));
+      
+      if (!couponDoc.exists()) {
+        console.log('❌ Coupon not found with ID:', couponId);
+        alert('Coupon not found!');
+        router.push('/coupons');
+        return;
+      }
+
+      const couponData = {
+        id: couponDoc.id,
+        ...couponDoc.data(),
+      };
+
+      console.log('✅ Coupon data found:', couponData);
+
+      // Check permissions
+      const isAdminUser = userObj.role === 'admin' || userObj.role === 'main_admin';
+      if (!isAdminUser) {
+        const vendorUid = userObj.documentId || userObj.uid;
+        const vendorEmail = userObj.email;
+        
+        const canEdit = 
+          couponData.createdBy === vendorUid || 
+          couponData.createdBy === vendorEmail ||
+          couponData.createdBy === userObj.userId;
+        
+        console.log('🔐 Permission check:', {
+          couponCreatedBy: couponData.createdBy,
+          vendorUid,
+          vendorEmail,
+          canEdit
+        });
+
+        if (!canEdit) {
+          alert('You do not have permission to edit this coupon!');
+          router.push('/coupons');
+          return;
+        }
+      }
+
+      setCoupon(couponData);
+
+      // Set form values from coupon data
+      setCode(couponData.code || '');
+      setDiscountType(couponData.discountType || 'Percentage');
+      setDiscount(couponData.discount?.toString() || '');
+      setMinOrder(couponData.minOrder?.toString() || '');
+      setMaxUsage(couponData.maxUsage?.toString() || '');
+      
+      // Format dates
+      const activeDateObj = couponData.activeDate?.toDate();
+      const expiryDateObj = couponData.expiryDate?.toDate();
+      
+      setActiveDate(activeDateObj ? activeDateObj.toISOString().split('T')[0] : '');
+      setExpiryDate(expiryDateObj ? expiryDateObj.toISOString().split('T')[0] : '');
+      
+      setSelectedCategory(couponData.category || 'all');
+      setSelectedSubCategory(couponData.subCategory || 'all');
+      setIsActive(couponData.isActive !== false);
+
+      // Fetch categories
+      await fetchCategories(userObj, couponData.category);
+    } catch (error) {
+      console.error('❌ Error fetching coupon:', error);
+      alert('Error loading coupon data!');
+      router.push('/coupons');
+    } finally {
+      setFetchLoading(false);
+    }
+  };
+
+  const fetchCategories = async (userObj, currentCategory) => {
     try {
       const categoriesSnapshot = await getDocs(collection(db, 'categories'));
       const categoriesData = categoriesSnapshot.docs.map(doc => ({
@@ -84,6 +175,17 @@ export default function CreateCoupon() {
       }
       
       setCategories(filteredCategories);
+
+      // If current category is not in filtered list, add it
+      if (currentCategory && currentCategory !== 'all') {
+        const currentCatExists = filteredCategories.some(cat => cat.id === currentCategory);
+        if (!currentCatExists) {
+          const originalCategory = categoriesData.find(cat => cat.id === currentCategory);
+          if (originalCategory) {
+            setCategories([...filteredCategories, originalCategory]);
+          }
+        }
+      }
     } catch (error) {
       console.error('Error fetching categories:', error);
     }
@@ -112,21 +214,20 @@ export default function CreateCoupon() {
       }
       
       setSubCategories(filteredSubCategories);
+
+      // If current subcategory is not in filtered list, add it
+      if (selectedSubCategory && selectedSubCategory !== 'all') {
+        const currentSubCatExists = filteredSubCategories.some(subCat => subCat.id === selectedSubCategory);
+        if (!currentSubCatExists) {
+          const originalSubCategory = subCategoriesData.find(subCat => subCat.id === selectedSubCategory);
+          if (originalSubCategory) {
+            setSubCategories([...filteredSubCategories, originalSubCategory]);
+          }
+        }
+      }
     } catch (error) {
       console.error('Error fetching subcategories:', error);
     }
-  };
-
-  const resetForm = () => {
-    setCode('');
-    setDiscountType('Percentage');
-    setDiscount('');
-    setMinOrder('');
-    setMaxUsage('');
-    setActiveDate('');
-    setExpiryDate('');
-    setSelectedCategory('all');
-    setSelectedSubCategory('all');
   };
 
   const handleSubmit = async (e) => {
@@ -153,8 +254,6 @@ export default function CreateCoupon() {
       return;
     }
 
-    const userData = JSON.parse(localStorage.getItem('user'));
-    
     const couponData = {
       code: code.toUpperCase().trim(),
       discountType,
@@ -165,23 +264,20 @@ export default function CreateCoupon() {
       expiryDate: Timestamp.fromDate(new Date(expiryDate)),
       category: selectedCategory,
       subCategory: selectedSubCategory,
-      createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
-      isActive: true,
-      usedCount: 0,
-      createdBy: userData.email || userData.userId,
-      createdByName: userData.name || userData.restaurantName,
-      createdByRole: userData.role
+      isActive: isActive,
     };
+
+    console.log('💾 Updating coupon with data:', couponData);
 
     try {
       setLoading(true);
-      await addDoc(collection(db, 'coupons'), couponData);
-      alert('Coupon created successfully!');
+      await updateDoc(doc(db, 'coupons', couponId), couponData);
+      alert('Coupon updated successfully!');
       router.push('/coupons');
     } catch (error) {
-      console.error('Error creating coupon:', error);
-      alert('Error creating coupon!');
+      console.error('Error updating coupon:', error);
+      alert('Error updating coupon!');
     } finally {
       setLoading(false);
     }
@@ -192,6 +288,39 @@ export default function CreateCoupon() {
   };
 
   const isAdminUser = currentUser?.role === 'admin' || currentUser?.role === 'main_admin';
+
+  if (fetchLoading) {
+    return (
+      <div className="d-flex min-vh-100">
+        <Sidebar />
+        <div className="flex-grow-1 bg-light d-flex align-items-center justify-content-center">
+          <div className="text-center">
+            <div className="spinner-border text-primary mb-3"></div>
+            <p className="text-muted">Loading coupon data...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!coupon) {
+    return (
+      <div className="d-flex min-vh-100">
+        <Sidebar />
+        <div className="flex-grow-1 bg-light d-flex align-items-center justify-content-center">
+          <div className="text-center">
+            <p className="text-muted">Coupon not found</p>
+            <button
+              className="btn btn-primary"
+              onClick={() => router.push('/coupons')}
+            >
+              Back to Coupons
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="d-flex min-vh-100">
@@ -209,11 +338,11 @@ export default function CreateCoupon() {
                 <ArrowLeft size={16} />
                 Back
               </button>
-              <h2 className="fw-bold text-dark mb-1">Create Coupon</h2>
+              <h2 className="fw-bold text-dark mb-1">Edit Coupon</h2>
               <p className="text-muted mb-0">
                 {isAdminUser 
-                  ? 'Create discount coupons for all products' 
-                  : 'Create discount coupons for your products'
+                  ? 'Edit discount coupon for all products' 
+                  : 'Edit your discount coupon'
                 }
               </p>
             </div>
@@ -266,13 +395,13 @@ export default function CreateCoupon() {
                       onChange={(e) => setDiscount(e.target.value)}
                       placeholder={discountType === 'Percentage' ? 'Ex. 20' : '100'}
                       min="1"
-                      max={discountType === 'Percentage' ? 'Ex. 100' : '10000'}
+                      max={discountType === 'Percentage' ? '100' : '10000'}
                       required
                     />
                   </div>
 
                   <div className="col-md-6 mb-3">
-                    <label className="form-label fw-medium text-dark">Minimum Order</label>
+                    <label className="form-label fw-medium text-dark">Minimum Order Price</label>
                     <input
                       type="number"
                       className="form-control"
@@ -290,7 +419,7 @@ export default function CreateCoupon() {
                     <h5 className="fw-semibold text-dark">Product Category</h5>
                     {!isAdminUser && categories.length === 0 && (
                       <div className="alert alert-warning mt-2">
-                        <small>You need to create categories first to create category-specific coupons.</small>
+                        <small>No categories found. This coupon will work on all products.</small>
                       </div>
                     )}
                   </div>
@@ -347,7 +476,7 @@ export default function CreateCoupon() {
                   </div>
 
                   <div className="col-md-6 mb-3">
-                    <label className="form-label fw-medium text-dark"> Usage Limit per Customer</label>
+                    <label className="form-label fw-medium text-dark">Usage Limit per Customer</label>
                     <input
                       type="number"
                       className="form-control"
@@ -381,20 +510,28 @@ export default function CreateCoupon() {
                       required
                     />
                   </div>
+
+                  <div className="col-md-6 mb-3">
+                    <label className="form-label fw-medium text-dark">Coupon Status</label>
+                    <select
+                      className="form-select"
+                      value={isActive}
+                      onChange={(e) => setIsActive(e.target.value === 'true')}
+                    >
+                      <option value={true}>Active</option>
+                      <option value={false}>Inactive</option>
+                    </select>
+                  </div>
                 </div>
 
-                {/* Coupon Scope Info */}
+                {/* Coupon Info */}
                 <div className="row mb-4">
                   <div className="col-12">
                     <div className="alert alert-info">
-                      <strong>Coupon Scope:</strong> This coupon will work on{' '}
-                      {selectedCategory === 'all' 
-                        ? 'all products across all categories' 
-                        : selectedSubCategory === 'all'
-                        ? `all products in ${categories.find(c => c.id === selectedCategory)?.name || 'selected category'}`
-                        : `products in ${subCategories.find(s => s.id === selectedSubCategory)?.name || 'selected sub-category'}`
-                      }
-                      {!isAdminUser && ' (Only your products)'}
+                      <strong>Coupon Information:</strong><br />
+                      • Created: {coupon.createdAt?.toDate().toLocaleDateString()}<br />
+                      • Used: {coupon.usedCount || 0} times<br />
+                      • Created by: {coupon.createdByName || coupon.createdBy}
                     </div>
                   </div>
                 </div>
@@ -404,19 +541,19 @@ export default function CreateCoupon() {
                   <button
                     type="button"
                     className="btn btn-outline-secondary"
-                    onClick={resetForm}
+                    onClick={() => router.push('/coupons')}
                     disabled={loading}
                   >
-                    Clear
+                    Cancel
                   </button>
                   <div className="d-flex gap-2">
                     <button
                       type="button"
-                      className="btn btn-outline-primary"
+                      className="btn btn-outline-danger"
                       onClick={() => router.push('/coupons')}
                       disabled={loading}
                     >
-                      Cancel
+                      Discard Changes
                     </button>
                     <button
                       type="submit"
@@ -426,12 +563,12 @@ export default function CreateCoupon() {
                       {loading ? (
                         <>
                           <div className="spinner-border spinner-border-sm" />
-                          Creating...
+                          Updating...
                         </>
                       ) : (
                         <>
                           <Save size={16} />
-                          Create Coupon
+                          Update Coupon
                         </>
                       )}
                     </button>

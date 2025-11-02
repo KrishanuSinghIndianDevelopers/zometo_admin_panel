@@ -41,15 +41,33 @@ import {
   Eye,
   Star,
   Clock,
-  MapPin
+  MapPin,
+  Store,
+  User
 } from 'lucide-react';
 
+// Helper functions
+const getCurrentUser = () => {
+  if (typeof window === 'undefined') return null;
+  const userData = localStorage.getItem('user');
+  if (!userData) return null;
+  try {
+    return JSON.parse(userData);
+  } catch (error) {
+    console.error('Error parsing user data:', error);
+    return null;
+  }
+};
 
 export default function DashboardPage() {
   const router = useRouter();
   const [orders, setOrders] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [timeRange, setTimeRange] = useState('week'); // week, month, year
+  const [timeRange, setTimeRange] = useState('week');
+  const [selectedVendor, setSelectedVendor] = useState('all');
+  const [currentUser, setCurrentUser] = useState(null);
+  const [vendorUid, setVendorUid] = useState(null);
 
   // Stats states
   const [totalRevenue, setTotalRevenue] = useState(0);
@@ -71,41 +89,130 @@ export default function DashboardPage() {
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D'];
 
   useEffect(() => {
-    const fetchOrders = async () => {
-      try {
-        const ordersRef = collection(db, 'orders');
-        const q = query(ordersRef, orderBy('orderDate', 'desc'));
-        const snapshot = await getDocs(q);
-
-        const data = snapshot.docs.map(doc => {
-          const order = doc.data();
-          let orderDate;
-          if (order.orderDate instanceof Timestamp) {
-            orderDate = order.orderDate.toDate();
-          } else if (typeof order.orderDate === 'string') {
-            orderDate = new Date(order.orderDate);
-          } else {
-            orderDate = new Date();
-          }
-          return {
-            id: doc.id,
-            ...order,
-            orderDate,
-          };
-        });
-
-        setOrders(data);
-        calculateStats(data);
-        generateChartData(data);
-        setRecentOrders(data.slice(0, 5)); // Last 5 orders
-      } catch (error) {
-        console.error('Error fetching orders:', error);
-      } finally {
-        setLoading(false);
+    const initializeDashboard = async () => {
+      const user = getCurrentUser();
+      setCurrentUser(user);
+      
+      if (!user) {
+        router.push('/login');
+        return;
       }
+
+      // If vendor, get vendor UID
+      if (user.role === 'vendor') {
+        await getVendorUid(user);
+      }
+
+      // Fetch vendors (for admin only)
+      if (user.role === 'main_admin' || user.role === 'admin') {
+        await fetchVendors();
+      }
+
+      await fetchOrders();
     };
-    fetchOrders();
+
+    initializeDashboard();
   }, []);
+
+  const getVendorUid = async (user) => {
+    try {
+      const vendorsQuery = query(
+        collection(db, 'vendors'),
+        where('email', '==', user.email)
+      );
+      const vendorsSnapshot = await getDocs(vendorsQuery);
+      if (!vendorsSnapshot.empty) {
+        const vendorUid = vendorsSnapshot.docs[0].id;
+        setVendorUid(vendorUid);
+        console.log("Vendor UID:", vendorUid);
+      }
+    } catch (error) {
+      console.error('Error getting vendor UID:', error);
+    }
+  };
+
+  const fetchVendors = async () => {
+    try {
+      const vendorsRef = collection(db, 'vendors');
+      const q = query(vendorsRef, orderBy('restaurantName', 'asc'));
+      const snapshot = await getDocs(q);
+      
+      const vendorsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      setVendors(vendorsData);
+    } catch (error) {
+      console.error('Error fetching vendors:', error);
+    }
+  };
+
+  const fetchOrders = async () => {
+    try {
+      let ordersQuery;
+      
+      // Build query based on user role and selected vendor
+      if (currentUser?.role === 'main_admin' || currentUser?.role === 'admin') {
+        if (selectedVendor === 'all') {
+          // Admin: Get all orders
+          ordersQuery = query(collection(db, 'orders'), orderBy('orderDate', 'desc'));
+        } else {
+          // Admin: Get orders for specific vendor
+          ordersQuery = query(
+            collection(db, 'orders'),
+            where('vendorId', '==', selectedVendor),
+            orderBy('orderDate', 'desc')
+          );
+        }
+      } else if (vendorUid) {
+        // Vendor: Get only their orders
+        ordersQuery = query(
+          collection(db, 'orders'),
+          where('vendorId', '==', vendorUid),
+          orderBy('orderDate', 'desc')
+        );
+      } else {
+        // Fallback: Get all orders
+        ordersQuery = query(collection(db, 'orders'), orderBy('orderDate', 'desc'));
+      }
+
+      const snapshot = await getDocs(ordersQuery);
+
+      const data = snapshot.docs.map(doc => {
+        const order = doc.data();
+        let orderDate;
+        if (order.orderDate instanceof Timestamp) {
+          orderDate = order.orderDate.toDate();
+        } else if (typeof order.orderDate === 'string') {
+          orderDate = new Date(order.orderDate);
+        } else {
+          orderDate = new Date();
+        }
+        return {
+          id: doc.id,
+          ...order,
+          orderDate,
+        };
+      });
+
+      setOrders(data);
+      calculateStats(data);
+      generateChartData(data);
+      setRecentOrders(data.slice(0, 5));
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Refetch orders when vendor selection changes
+  useEffect(() => {
+    if (currentUser) {
+      fetchOrders();
+    }
+  }, [selectedVendor, vendorUid]);
 
   const calculateStats = (ordersData) => {
     const totalRev = ordersData.reduce((sum, order) => sum + (order.totalAmount || 0), 0);
@@ -118,10 +225,10 @@ export default function DashboardPage() {
     setAvgOrderValue(avgValue);
     setCompletedOrders(completedOrd);
 
-    // Calculate growth (simplified)
-    const growthRate = 12.5; // This would normally come from comparing with previous period
+    // Calculate growth (simplified - in real app, compare with previous period)
+    const growthRate = ordersData.length > 10 ? 12.5 : 0;
     setRevenueGrowth(growthRate);
-    setOrderGrowth(8.2);
+    setOrderGrowth(ordersData.length > 10 ? 8.2 : 0);
   };
 
   const generateChartData = (ordersData) => {
@@ -164,15 +271,29 @@ export default function DashboardPage() {
 
     setCategoryData(categoryChartData);
 
-    // Order trend (last 6 months - simplified)
-    const orderTrend = [
-      { name: 'Jan', orders: 45 },
-      { name: 'Feb', orders: 52 },
-      { name: 'Mar', orders: 48 },
-      { name: 'Apr', orders: 61 },
-      { name: 'May', orders: 55 },
-      { name: 'Jun', orders: 68 },
-    ];
+    // Order trend (last 6 months - ACTUAL DATA)
+    const last6Months = [...Array(6)].map((_, i) => {
+      const date = new Date();
+      date.setMonth(date.getMonth() - i);
+      return {
+        month: date.getMonth(),
+        year: date.getFullYear(),
+        name: date.toLocaleDateString('en', { month: 'short' })
+      };
+    }).reverse();
+
+    const orderTrend = last6Months.map(({ month, year, name }) => {
+      const monthOrders = ordersData.filter(order => {
+        const orderDate = new Date(order.orderDate);
+        return orderDate.getMonth() === month && orderDate.getFullYear() === year;
+      });
+      
+      return {
+        name,
+        orders: monthOrders.length
+      };
+    });
+
     setOrderTrendData(orderTrend);
   };
 
@@ -205,6 +326,9 @@ export default function DashboardPage() {
     return statusColors[status] || 'secondary';
   };
 
+  const isAdmin = currentUser?.role === 'main_admin' || currentUser?.role === 'admin';
+  const isVendor = currentUser?.role === 'vendor';
+
   if (loading) {
     return (
       <div className="d-flex" style={{ minHeight: '100vh' }}>
@@ -225,9 +349,8 @@ export default function DashboardPage() {
 
   return (
     <div className="d-flex" style={{ minHeight: '100vh' }}>
-    
-        <div className="d-flex" style={{ minHeight: '100vh' }}>
-      <Sidebar />
+      <div className="d-flex" style={{ minHeight: '100vh' }}>
+        <Sidebar />
       </div>
       
       {/* Main Content */}
@@ -236,10 +359,43 @@ export default function DashboardPage() {
         <div className="p-4 border-bottom bg-white">
           <div className="d-flex justify-content-between align-items-center">
             <div>
-              <h2 className="fw-bold text-dark mb-1">Dashboard Overview</h2>
-              <p className="text-muted mb-0">Welcome to your restaurant management dashboard</p>
+              <h2 className="fw-bold text-dark mb-1">
+                {isAdmin ? 'Admin Dashboard' : 'My Dashboard'}
+              </h2>
+              <p className="text-muted mb-0">
+                {isAdmin 
+                  ? 'Overview of all restaurant operations' 
+                  : `Welcome to ${currentUser?.restaurantName || currentUser?.name}'s dashboard`
+                }
+              </p>
             </div>
-            <div className="d-flex gap-2">
+            <div className="d-flex gap-2 align-items-center">
+              {/* Vendor Filter - Only for Admin */}
+              {isAdmin && vendors.length > 0 && (
+                <select 
+                  className="form-select"
+                  value={selectedVendor}
+                  onChange={(e) => setSelectedVendor(e.target.value)}
+                  style={{ minWidth: '200px' }}
+                >
+                  <option value="all">All Vendors</option>
+                  {vendors.map(vendor => (
+                    <option key={vendor.id} value={vendor.id}>
+                      {vendor.restaurantName}
+                    </option>
+                  ))}
+                </select>
+              )}
+              
+              {/* User Badge */}
+              <div className="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 px-3 py-2">
+                {isAdmin ? (
+                  <><User size={16} className="me-1" /> Admin</>
+                ) : (
+                  <><Store size={16} className="me-1" /> {currentUser?.restaurantName || 'Vendor'}</>
+                )}
+              </div>
+
               <select 
                 className="form-select w-auto"
                 value={timeRange}
@@ -352,23 +508,30 @@ export default function DashboardPage() {
               <div className="card border-0 shadow-sm h-100">
                 <div className="card-body">
                   <h5 className="fw-semibold text-dark mb-4">Revenue Overview</h5>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={revenueData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis dataKey="name" fontSize={12} />
-                      <YAxis fontSize={12} />
-                      <Tooltip 
-                        formatter={(value) => [formatCurrency(value), 'Revenue']}
-                      />
-                      <Legend />
-                      <Bar 
-                        dataKey="revenue" 
-                        fill="#007bff" 
-                        name="Revenue"
-                        radius={[4, 4, 0, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {revenueData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={revenueData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="name" fontSize={12} />
+                        <YAxis fontSize={12} />
+                        <Tooltip 
+                          formatter={(value) => [formatCurrency(value), 'Revenue']}
+                        />
+                        <Legend />
+                        <Bar 
+                          dataKey="revenue" 
+                          fill="#007bff" 
+                          name="Revenue"
+                          radius={[4, 4, 0, 0]}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="text-center py-5">
+                      <DollarSign size={48} className="text-muted mb-3 opacity-50" />
+                      <p className="text-muted">No revenue data available</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -415,24 +578,31 @@ export default function DashboardPage() {
             <div className="col-xl-6">
               <div className="card border-0 shadow-sm h-100">
                 <div className="card-body">
-                  <h5 className="fw-semibold text-dark mb-4">Order Trends</h5>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <LineChart data={orderTrendData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis dataKey="name" fontSize={12} />
-                      <YAxis fontSize={12} />
-                      <Tooltip />
-                      <Legend />
-                      <Line 
-                        type="monotone" 
-                        dataKey="orders" 
-                        stroke="#00C49F" 
-                        strokeWidth={2}
-                        name="Orders"
-                        dot={{ fill: '#00C49F' }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <h5 className="fw-semibold text-dark mb-4">Order Trends (Last 6 Months)</h5>
+                  {orderTrendData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={250}>
+                      <LineChart data={orderTrendData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="name" fontSize={12} />
+                        <YAxis fontSize={12} />
+                        <Tooltip />
+                        <Legend />
+                        <Line 
+                          type="monotone" 
+                          dataKey="orders" 
+                          stroke="#00C49F" 
+                          strokeWidth={2}
+                          name="Orders"
+                          dot={{ fill: '#00C49F' }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="text-center py-4">
+                      <ShoppingCart size={48} className="text-muted mb-3 opacity-50" />
+                      <p className="text-muted">No order trend data available</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

@@ -67,6 +67,8 @@ export default function Sidebar() {
         <SidebarLink icon={<FaUsers />} label="Customers" href="/customers" isMobile={isMobile} />
         <SidebarLink icon={<FaMoneyBillWave />} label="Coupons" href="/coupons" isMobile={isMobile} />
         <SidebarLink icon={<FaFileInvoice />} label="Product Categories" href="/categories" isMobile={isMobile} />
+        <SidebarLink icon={<FaFileInvoice />} label="Notification" href="/notification" isMobile={isMobile} />
+       
       
       </ul>
 

@@ -28,6 +28,8 @@ export default function CreateProduct() {
   const [subCategories, setSubCategories] = useState([]);
   const [nestedSubCategories, setNestedSubCategories] = useState([]);
   const [availableProducts, setAvailableProducts] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [vendorUid, setVendorUid] = useState(null); // ✅ ADDED: Store vendor UID separately
 
   // Status options
   const statusOptions = [
@@ -36,7 +38,7 @@ export default function CreateProduct() {
     { value: 'cancelled', label: '🔴 Cancelled', color: 'danger' }
   ];
 
-  // Form states - Updated with offer fields
+  // Form states
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -98,10 +100,78 @@ export default function CreateProduct() {
     { value: 'bxgyf', label: 'Buy X Get Y Free (Different Product)' }
   ];
 
+  // ✅ FIXED: Helper function to generate offer text
+  const generateOfferText = (data) => {
+    switch(data.offerType) {
+      case 'bogo':
+        return 'Buy 1 Get 1 Free!';
+      case 'bxgy':
+        return `Buy ${data.buyX || 'X'} Get ${data.getY || 'Y'} Free!`;
+      case 'bogof':
+        return 'Buy 1 Get 1 Free (Different Product)!';
+      case 'bxgyf':
+        return `Buy ${data.buyX || 'X'} Get ${data.getY || 'Y'} Free (Different Product)!`;
+      default:
+        return 'No active offer';
+    }
+  };
+
   useEffect(() => {
-    fetchCategories();
-    fetchAvailableProducts();
+    checkAuthAndRole();
   }, []);
+
+  // ✅ FIXED: Get vendor UID properly
+  const checkAuthAndRole = async () => {
+    const isLoggedIn = localStorage.getItem('isLoggedIn');
+    const userData = localStorage.getItem('user');
+
+    if (!isLoggedIn || !userData) {
+      router.push('/login');
+      return;
+    }
+
+    const userObj = JSON.parse(userData);
+    console.log('Current User:', userObj);
+    setCurrentUser(userObj);
+    
+    // ✅ CRITICAL FIX: Get vendor UID for vendors
+    if (userObj.role === 'vendor') {
+      await getVendorUid(userObj.email);
+    }
+    
+    // Load data based on user role
+    fetchCategories();
+    fetchAvailableProducts(userObj);
+  };
+
+  // ✅ NEW: Function to get vendor UID
+  const getVendorUid = async (email) => {
+    try {
+      const vendorsQuery = query(
+        collection(db, 'vendors'),
+        where('email', '==', email)
+      );
+      
+      const vendorsSnapshot = await getDocs(vendorsQuery);
+      if (!vendorsSnapshot.empty) {
+        const vendorDoc = vendorsSnapshot.docs[0];
+        const vendorUid = vendorDoc.id; // ✅ This is the correct vendor UID
+        const vendorData = vendorDoc.data();
+        
+        console.log('✅ Vendor UID found:', vendorUid);
+        console.log('✅ Vendor data:', vendorData);
+        
+        setVendorUid(vendorUid);
+        return vendorUid;
+      } else {
+        console.error('❌ No vendor found for email:', email);
+        return null;
+      }
+    } catch (error) {
+      console.error('❌ Error getting vendor UID:', error);
+      return null;
+    }
+  };
 
   // Filter categories based on food type
   useEffect(() => {
@@ -163,6 +233,7 @@ export default function CreateProduct() {
     }
   }, [formData.offerType]);
 
+  // ✅ FIXED: Direct Firebase fetch for categories
   const fetchCategories = async () => {
     try {
       const q = query(collection(db, 'categories'), where('isMainCategory', '==', true));
@@ -172,25 +243,59 @@ export default function CreateProduct() {
         ...doc.data(),
       }));
       setCategories(categoriesData);
+      setFilteredCategories(categoriesData);
+      console.log("Categories loaded:", categoriesData.length);
     } catch (error) {
       console.error('Error fetching categories:', error);
     }
   };
 
-  const fetchAvailableProducts = async () => {
+  // ✅ FIXED: Direct Firebase fetch for available products
+  const fetchAvailableProducts = async (userObj) => {
     try {
-      const q = query(collection(db, 'products'), where('status', '==', 'available'));
+      let q;
+      
+      if (userObj.role === 'main_admin' || userObj.role === 'admin') {
+        // Admin can see all available products
+        q = query(collection(db, 'products'), where('status', '==', 'available'));
+        console.log("Fetching all products for admin");
+      } else {
+        // Vendor - use the vendorUid we already fetched
+        if (vendorUid) {
+          q = query(
+            collection(db, 'products'), 
+            where('status', '==', 'available'),
+            where('vendorId', '==', vendorUid)
+          );
+          console.log("Fetching vendor products with UID:", vendorUid);
+        } else {
+          console.log("Vendor UID not available yet");
+          setAvailableProducts([]);
+          return;
+        }
+      }
+      
       const querySnapshot = await getDocs(q);
       const productsData = querySnapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       }));
       setAvailableProducts(productsData);
+      console.log("Available products loaded:", productsData.length);
     } catch (error) {
       console.error('Error fetching products:', error);
+      setAvailableProducts([]);
     }
   };
 
+  // ✅ FIXED: Update available products when vendorUid changes
+  useEffect(() => {
+    if (currentUser && vendorUid) {
+      fetchAvailableProducts(currentUser);
+    }
+  }, [vendorUid]);
+
+  // ✅ FIXED: Direct Firebase fetch for subcategories
   const fetchSubCategories = async (parentId, level = 0) => {
     try {
       const q = query(collection(db, 'categories'), where('parentCategory', '==', parentId));
@@ -208,22 +313,11 @@ export default function CreateProduct() {
       }
     } catch (error) {
       console.error('Error fetching subcategories:', error);
-    }
-  };
-
-  // Helper function to generate offer text
-  const generateOfferText = (data) => {
-    switch(data.offerType) {
-      case 'bogo':
-        return 'Buy 1 Get 1 Free!';
-      case 'bxgy':
-        return `Buy ${data.buyX || 'X'} Get ${data.getY || 'Y'} Free!`;
-      case 'bogof':
-        return 'Buy 1 Get 1 Free (Different Product)!';
-      case 'bxgyf':
-        return `Buy ${data.buyX || 'X'} Get ${data.getY || 'Y'} Free (Different Product)!`;
-      default:
-        return 'No active offer';
+      if (level === 0) {
+        setSubCategories([]);
+      } else if (level === 1) {
+        setNestedSubCategories([]);
+      }
     }
   };
 
@@ -314,14 +408,33 @@ export default function CreateProduct() {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        alert('Please select an image file');
+        return;
+      }
+      
+      // Validate file size (5MB max)
+      if (file.size > 5 * 1024 * 1024) {
+        alert('Image size must be less than 5MB');
+        return;
+      }
+
       setImage(file);
       setPreview(URL.createObjectURL(file));
     }
   };
 
+  // ✅ FIXED: Complete handleSubmit function with proper vendor UID
   const handleSubmit = async (e) => {
     e.preventDefault();
     
+    if (!currentUser) {
+      alert('User not authenticated!');
+      return;
+    }
+
+    // Validate required fields
     if (!formData.title || !formData.categoryId || !formData.originalPrice || !image) {
       alert('Please fill all required fields and upload an image.');
       return;
@@ -345,6 +458,12 @@ export default function CreateProduct() {
       }
     }
 
+    // ✅ CRITICAL FIX: Validate vendor UID for vendors
+    if (currentUser.role === 'vendor' && !vendorUid) {
+      alert('Vendor authentication failed. Please try logging in again.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -354,38 +473,68 @@ export default function CreateProduct() {
       await uploadBytes(imageRef, image);
       const imageUrl = await getDownloadURL(imageRef);
 
-      // Prepare product data
+      console.log("✅ Image uploaded successfully:", imageUrl);
+
+      // ✅ CRITICAL FIX: Determine vendor UID and name
+      let finalVendorUid;
+      let finalVendorName;
+
+      if (currentUser.role === 'main_admin' || currentUser.role === 'admin') {
+        finalVendorUid = 'admin';
+        finalVendorName = 'Admin';
+      } else {
+        // Use the vendorUid we already fetched
+        finalVendorUid = vendorUid;
+        finalVendorName = currentUser.restaurantName || currentUser.name || currentUser.email;
+        
+        console.log("✅ Using vendor UID for product:", finalVendorUid);
+        console.log("✅ Using vendor name for product:", finalVendorName);
+        
+        if (!finalVendorUid) {
+          throw new Error('Vendor UID not found. Please contact admin.');
+        }
+      }
+
+      // Prepare product data with vendor information
       const sellingPrice = formData.amount || formData.originalPrice;
       const discountedAmount = formData.discountedAmount || '0';
       
       const productData = {
-        title: formData.title,
-        description: formData.description,
+        title: formData.title.trim(),
+        description: formData.description?.trim() || '',
         categoryId: formData.categoryId,
-        categoryName: formData.categoryName,
-        subCategoryName: formData.subCategoryName,
-        subCategoryId: formData.subCategoryId,
-        nestedSubCategoryName: formData.nestedSubCategoryName,
-        nestedSubCategoryId: formData.nestedSubCategoryId,
+        categoryName: formData.categoryName || '',
+        subCategoryName: formData.subCategoryName || '',
+        subCategoryId: formData.subCategoryId || '',
+        nestedSubCategoryName: formData.nestedSubCategoryName || '',
+        nestedSubCategoryId: formData.nestedSubCategoryId || '',
         amount: parseFloat(sellingPrice),
         originalPrice: parseFloat(formData.originalPrice),
-        discountedAmount: parseFloat(discountedAmount),
-        foodType: formData.foodType,
-        size: formData.size,
-        unit: formData.unit,
-        quantity: formData.quantity,
+        discountedAmount: Math.max(0, parseFloat(discountedAmount)),
+        foodType: formData.foodType || 'veg',
+        size: formData.size || '',
+        unit: formData.unit || '',
+        quantity: formData.quantity ? parseFloat(formData.quantity) : null,
         priority: parseInt(formData.priority) || 0,
         status: formData.status || 'available',
         // Offer fields
-        offerType: formData.offerType,
+        offerType: formData.offerType || 'none',
         buyX: formData.buyX ? parseInt(formData.buyX) : null,
         getY: formData.getY ? parseInt(formData.getY) : null,
         freeProductId: formData.freeProductId || null,
         maxQuantity: formData.maxQuantity ? parseInt(formData.maxQuantity) : 0,
         offerDescription: formData.offerDescription || generateOfferText(formData),
-        imageUrl,
+        // ✅ CRITICAL: Make sure vendorId is included
+        vendorId: finalVendorUid, // This should be the document ID like "5Z4mCl2PKpzS9fr3lTSG"
+        vendorName: finalVendorName, // "Chandu ka Dabha"
+        createdBy: currentUser.role || 'vendor',
+        imageUrl: imageUrl,
         timestamp: Timestamp.now(),
       };
+
+      console.log('✅ Final product data to save:', productData);
+      console.log('✅ vendorId in product data:', productData.vendorId);
+      console.log('✅ vendorName in product data:', productData.vendorName);
 
       // Remove empty fields
       Object.keys(productData).forEach(key => {
@@ -394,14 +543,17 @@ export default function CreateProduct() {
         }
       });
 
+      console.log('✅ Creating product with data:', productData);
+
       // Save to Firestore
-      await addDoc(collection(db, 'products'), productData);
+      const docRef = await addDoc(collection(db, 'products'), productData);
       
+      console.log('✅ Product created with ID:', docRef.id);
       alert('Product created successfully!');
       router.push('/products');
     } catch (error) {
-      console.error('Error creating product:', error);
-      alert('Failed to create product!');
+      console.error('❌ Error creating product:', error);
+      alert('Failed to create product! ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -439,6 +591,18 @@ export default function CreateProduct() {
     setNestedSubCategories([]);
   };
 
+  if (!currentUser) {
+    return (
+      <div className="d-flex justify-content-center align-items-center min-vh-100">
+        <div className="spinner-border text-primary" role="status">
+          <span className="visually-hidden">Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  const isVendor = currentUser.role === 'vendor';
+
   return (
     <div className="d-flex" style={{ minHeight: '100vh', overflowX: 'hidden' }}>
       {/* Sidebar */}
@@ -453,40 +617,65 @@ export default function CreateProduct() {
           <div className="d-flex justify-content-between align-items-center">
             <div>
               <h2 className="fw-bold text-dark mb-1">Create New Product</h2>
-              <p className="text-muted mb-0">Add a new food item to your menu</p>
+              <p className="text-muted mb-0">
+                {isVendor ? 'Add a new food item to your menu' : 'Add a new product to the system'}
+              </p>
             </div>
-            <button
-              className="btn btn-primary d-flex align-items-center gap-2"
-              onClick={() => {
-                resetForm();
-              }}
-            >
-              <Plus size={18} />
-              Add Future Item
-            </button>
+            <div className="d-flex align-items-center gap-3">
+              <div className="badge bg-primary bg-opacity-10 text-primary p-2">
+                Logged in as: <strong>{currentUser.role.toUpperCase()}</strong>
+              </div>
+              {isVendor && (
+                <div className="badge bg-success bg-opacity-10 text-success">
+                  Vendor: {currentUser.name}
+                </div>
+              )}
+              <button
+                className="btn btn-primary d-flex align-items-center gap-2"
+                onClick={resetForm}
+                disabled={loading}
+              >
+                <Plus size={18} />
+                Add Future Item
+              </button>
+            </div>
           </div>
         </div>
+
+        {/* Debug Info */}
+        <div className="p-3 bg-warning bg-opacity-10">
+          <small className="text-muted">
+            <strong>Vendor UID Debug:</strong> {vendorUid ? `✅ UID: ${vendorUid}` : '❌ Not loaded'} | 
+            Role: {currentUser.role} | Name: {currentUser.name} | Email: {currentUser.email}
+          </small>
+        </div>
+
 
         {/* Form Content */}
         <div className="p-4">
           <div className="card border-0 shadow-lg rounded-4">
             <div className="card-body p-4 p-md-5">
               <form onSubmit={handleSubmit}>
-                
                 {/* Table-like layout for form */}
                 <div>
                   <table className="table table-borderless w-100">
                     <thead>
                       <tr>
-                        <th width="20%" className="text-dark fw-semibold">Field</th>
-                        <th width="80%" className="text-dark fw-semibold">Value</th>
+                        <th width="20%" className="text-dark fw-semibold">
+                          Field
+                        </th>
+                        <th width="80%" className="text-dark fw-semibold">
+                          Value
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {/* Product Name (Single field) */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Product Name *</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Product Name *
+                          </label>
                         </td>
                         <td>
                           <input
@@ -500,11 +689,13 @@ export default function CreateProduct() {
                           />
                         </td>
                       </tr>
-                      
+
                       {/* Description */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Description</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Description
+                          </label>
                         </td>
                         <td>
                           <textarea
@@ -517,29 +708,37 @@ export default function CreateProduct() {
                           />
                         </td>
                       </tr>
-                      
+
                       {/* Food Type & Category */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Food Type & Category</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Food Type & Category
+                          </label>
                         </td>
                         <td>
                           <div className="row g-3">
                             <div className="col-md-3">
-                              <label className="form-label fw-medium text-dark mb-1">Food Type</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Food Type
+                              </label>
                               <select
                                 className="form-select"
                                 name="foodType"
                                 value={formData.foodType}
                                 onChange={handleInputChange}
                               >
-                                {foodTypes.map(type => (
-                                  <option key={type.value} value={type.value}>{type.label}</option>
+                                {foodTypes.map((type) => (
+                                  <option key={type.value} value={type.value}>
+                                    {type.label}
+                                  </option>
                                 ))}
                               </select>
                             </div>
                             <div className="col-md-3">
-                              <label className="form-label fw-medium text-dark mb-1">Category *</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Category *
+                              </label>
                               <select
                                 className="form-select"
                                 name="categoryId"
@@ -548,14 +747,18 @@ export default function CreateProduct() {
                                 required
                               >
                                 <option value="">Select Category</option>
-                                {filteredCategories.map(cat => (
-                                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                                {filteredCategories.map((cat) => (
+                                  <option key={cat.id} value={cat.id}>
+                                    {cat.name}
+                                  </option>
                                 ))}
                               </select>
                             </div>
                             {subCategories.length > 0 && (
                               <div className="col-md-3">
-                                <label className="form-label fw-medium text-dark mb-1">Subcategory</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Subcategory
+                                </label>
                                 <select
                                   className="form-select"
                                   name="subCategoryId"
@@ -563,9 +766,10 @@ export default function CreateProduct() {
                                   onChange={handleInputChange}
                                 >
                                   <option value="">Select Subcategory</option>
-                                  {subCategories.map(subCat => (
+                                  {subCategories.map((subCat) => (
                                     <option key={subCat.id} value={subCat.id}>
-                                      {subCat.level > 0 ? '↳ ' : ''}{subCat.name}
+                                      {subCat.level > 0 ? "↳ " : ""}
+                                      {subCat.name}
                                     </option>
                                   ))}
                                 </select>
@@ -573,17 +777,25 @@ export default function CreateProduct() {
                             )}
                             {nestedSubCategories.length > 0 && (
                               <div className="col-md-3">
-                                <label className="form-label fw-medium text-dark mb-1">Sub-Subcategory</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Sub-Subcategory
+                                </label>
                                 <select
                                   className="form-select"
                                   name="nestedSubCategoryId"
                                   value={formData.nestedSubCategoryId}
                                   onChange={handleInputChange}
                                 >
-                                  <option value="">Select Sub-Subcategory</option>
-                                  {nestedSubCategories.map(nestedCat => (
-                                    <option key={nestedCat.id} value={nestedCat.id}>
-                                      {'↳ '.repeat(nestedCat.level)}{nestedCat.name}
+                                  <option value="">
+                                    Select Sub-Subcategory
+                                  </option>
+                                  {nestedSubCategories.map((nestedCat) => (
+                                    <option
+                                      key={nestedCat.id}
+                                      value={nestedCat.id}
+                                    >
+                                      {"↳ ".repeat(nestedCat.level)}
+                                      {nestedCat.name}
                                     </option>
                                   ))}
                                 </select>
@@ -592,16 +804,20 @@ export default function CreateProduct() {
                           </div>
                         </td>
                       </tr>
-                      
+
                       {/* Pricing */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Pricing</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Pricing
+                          </label>
                         </td>
                         <td>
                           <div className="row">
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Original Price (₹) *</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Original Price (₹) *
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -615,7 +831,9 @@ export default function CreateProduct() {
                               />
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Selling Price (₹)</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Selling Price (₹)
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -625,11 +843,13 @@ export default function CreateProduct() {
                                 placeholder="0.00"
                                 step="0.01"
                                 min="0"
-                                max={formData.originalPrice || ''}
+                                max={formData.originalPrice || ""}
                               />
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Discount Amount (₹)</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Discount Amount (₹)
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -641,12 +861,19 @@ export default function CreateProduct() {
                                 min="0"
                                 readOnly
                               />
-                              <small className="text-muted">Auto-calculated</small>
+                              <small className="text-muted">
+                                Auto-calculated
+                              </small>
                             </div>
                           </div>
                           <small className="text-muted mt-2 d-block">
-                            {formData.amount && formData.originalPrice && parseFloat(formData.amount) > parseFloat(formData.originalPrice) ? (
-                              <span className="text-danger">Selling price cannot be more than original price</span>
+                            {formData.amount &&
+                            formData.originalPrice &&
+                            parseFloat(formData.amount) >
+                              parseFloat(formData.originalPrice) ? (
+                              <span className="text-danger">
+                                Selling price cannot be more than original price
+                              </span>
                             ) : (
                               "Selling price must be less than or equal to original price"
                             )}
@@ -665,24 +892,31 @@ export default function CreateProduct() {
                         <td>
                           <div className="row g-3">
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Offer Type</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Offer Type
+                              </label>
                               <select
                                 className="form-select"
                                 name="offerType"
                                 value={formData.offerType}
                                 onChange={handleInputChange}
                               >
-                                {offerTypes.map(type => (
-                                  <option key={type.value} value={type.value}>{type.label}</option>
+                                {offerTypes.map((type) => (
+                                  <option key={type.value} value={type.value}>
+                                    {type.label}
+                                  </option>
                                 ))}
                               </select>
                             </div>
 
                             {/* Show these fields only when BXGY offer is selected */}
-                            {(formData.offerType === 'bxgy' || formData.offerType === 'bxgyf') && (
+                            {(formData.offerType === "bxgy" ||
+                              formData.offerType === "bxgyf") && (
                               <>
                                 <div className="col-md-4">
-                                  <label className="form-label fw-medium text-dark mb-1">Buy Quantity (X)</label>
+                                  <label className="form-label fw-medium text-dark mb-1">
+                                    Buy Quantity (X)
+                                  </label>
                                   <input
                                     type="number"
                                     className="form-control"
@@ -694,7 +928,9 @@ export default function CreateProduct() {
                                   />
                                 </div>
                                 <div className="col-md-4">
-                                  <label className="form-label fw-medium text-dark mb-1">Get Free Quantity (Y)</label>
+                                  <label className="form-label fw-medium text-dark mb-1">
+                                    Get Free Quantity (Y)
+                                  </label>
                                   <input
                                     type="number"
                                     className="form-control"
@@ -709,9 +945,12 @@ export default function CreateProduct() {
                             )}
 
                             {/* Show for different product offers */}
-                            {(formData.offerType === 'bogof' || formData.offerType === 'bxgyf') && (
+                            {(formData.offerType === "bogof" ||
+                              formData.offerType === "bxgyf") && (
                               <div className="col-md-6">
-                                <label className="form-label fw-medium text-dark mb-1">Free Product</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Free Product
+                                </label>
                                 <select
                                   className="form-select"
                                   name="freeProductId"
@@ -719,7 +958,7 @@ export default function CreateProduct() {
                                   onChange={handleInputChange}
                                 >
                                   <option value="">Select Free Product</option>
-                                  {availableProducts.map(product => (
+                                  {availableProducts.map((product) => (
                                     <option key={product.id} value={product.id}>
                                       {product.title} - ₹{product.amount}
                                     </option>
@@ -729,9 +968,11 @@ export default function CreateProduct() {
                             )}
 
                             {/* Maximum application limit */}
-                            {formData.offerType !== 'none' && (
+                            {formData.offerType !== "none" && (
                               <div className="col-md-4">
-                                <label className="form-label fw-medium text-dark mb-1">Max Applications</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Max Applications
+                                </label>
                                 <input
                                   type="number"
                                   className="form-control"
@@ -741,14 +982,19 @@ export default function CreateProduct() {
                                   min="1"
                                   placeholder="e.g., 5 (0 = unlimited)"
                                 />
-                                <small className="text-muted">Maximum times this offer can be applied per order (0 = unlimited)</small>
+                                <small className="text-muted">
+                                  Maximum times this offer can be applied per
+                                  order (0 = unlimited)
+                                </small>
                               </div>
                             )}
 
                             {/* Offer Description */}
-                            {formData.offerType !== 'none' && (
+                            {formData.offerType !== "none" && (
                               <div className="col-12">
-                                <label className="form-label fw-medium text-dark mb-1">Offer Description</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Offer Description
+                                </label>
                                 <input
                                   type="text"
                                   className="form-control"
@@ -762,57 +1008,72 @@ export default function CreateProduct() {
                           </div>
 
                           {/* Dynamic offer preview */}
-                          {formData.offerType !== 'none' && (
+                          {formData.offerType !== "none" && (
                             <div className="mt-3 p-3 bg-light rounded">
-                              <h6 className="fw-semibold mb-2">Offer Preview:</h6>
+                              <h6 className="fw-semibold mb-2">
+                                Offer Preview:
+                              </h6>
                               <p className="mb-0 text-success fw-medium">
                                 {generateOfferText(formData)}
                               </p>
                               {formData.maxQuantity && (
                                 <small className="text-muted">
-                                  Maximum {formData.maxQuantity} application(s) per order
+                                  Maximum {formData.maxQuantity} application(s)
+                                  per order
                                 </small>
                               )}
                             </div>
                           )}
                         </td>
                       </tr>
-                      
+
                       {/* Product Details */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Product Details</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Product Details
+                          </label>
                         </td>
                         <td>
                           <div className="row">
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Size</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Size
+                              </label>
                               <select
                                 className="form-select"
                                 name="size"
                                 value={formData.size}
                                 onChange={handleInputChange}
                               >
-                                {sizes.map(size => (
-                                  <option key={size.value} value={size.value}>{size.label}</option>
+                                {sizes.map((size) => (
+                                  <option key={size.value} value={size.value}>
+                                    {size.label}
+                                  </option>
                                 ))}
                               </select>
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Unit</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Unit
+                              </label>
                               <select
                                 className="form-select"
                                 name="unit"
                                 value={formData.unit}
                                 onChange={handleInputChange}
                               >
-                                {units.map(unit => (
-                                  <option key={unit.value} value={unit.value}>{unit.label}</option>
+                                {units.map((unit) => (
+                                  <option key={unit.value} value={unit.value}>
+                                    {unit.label}
+                                  </option>
                                 ))}
                               </select>
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Quantity</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Quantity
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -826,16 +1087,20 @@ export default function CreateProduct() {
                           </div>
                         </td>
                       </tr>
-                      
+
                       {/* Priority & Status */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Priority & Status</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Priority & Status
+                          </label>
                         </td>
                         <td>
                           <div className="row">
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Priority</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Priority
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -846,36 +1111,52 @@ export default function CreateProduct() {
                                 max="1000"
                                 placeholder="Enter priority (1-1000)"
                               />
-                              <small className="text-muted">Higher priority products appear first (1-1000)</small>
+                              <small className="text-muted">
+                                Higher priority products appear first (1-1000)
+                              </small>
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Status</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Status
+                              </label>
                               <select
                                 className="form-select"
                                 name="status"
                                 value={formData.status}
                                 onChange={handleInputChange}
                               >
-                                {statusOptions.map(option => (
-                                  <option key={option.value} value={option.value}>
+                                {statusOptions.map((option) => (
+                                  <option
+                                    key={option.value}
+                                    value={option.value}
+                                  >
                                     {option.label}
                                   </option>
                                 ))}
                               </select>
-                              <small className="text-muted">Set product availability status</small>
+                              <small className="text-muted">
+                                Set product availability status
+                              </small>
                             </div>
                           </div>
                         </td>
                       </tr>
-                      
+
                       {/* Image Upload */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Product Image *</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Product Image *
+                          </label>
                         </td>
                         <td>
-                          <div className="border-dashed border-2 rounded-3 p-4 text-center"
-                               style={{ borderColor: '#dee2e6', backgroundColor: '#f8f9fa' }}>
+                          <div
+                            className="border-dashed border-2 rounded-3 p-4 text-center"
+                            style={{
+                              borderColor: "#dee2e6",
+                              backgroundColor: "#f8f9fa",
+                            }}
+                          >
                             <input
                               type="file"
                               accept="image/*"
@@ -884,10 +1165,15 @@ export default function CreateProduct() {
                               onChange={handleImageChange}
                               required
                             />
-                            <label htmlFor="imageUpload" className="cursor-pointer d-block">
+                            <label
+                              htmlFor="imageUpload"
+                              className="cursor-pointer d-block"
+                            >
                               <div className="py-3">
                                 <Upload size={32} className="text-muted mb-2" />
-                                <h6 className="fw-semibold text-dark mb-1">Click to upload product image</h6>
+                                <h6 className="fw-semibold text-dark mb-1">
+                                  Click to upload product image
+                                </h6>
                                 <p className="text-muted mb-0 small">
                                   PNG, JPG, WEBP up to 5MB
                                 </p>
@@ -901,10 +1187,15 @@ export default function CreateProduct() {
                                 src={preview}
                                 alt="Preview"
                                 className="img-fluid rounded shadow-sm"
-                                style={{ maxHeight: '200px', objectFit: 'cover' }}
+                                style={{
+                                  maxHeight: "200px",
+                                  objectFit: "cover",
+                                }}
                               />
                               <div className="mt-1">
-                                <small className="text-muted">Image Preview</small>
+                                <small className="text-muted">
+                                  Image Preview
+                                </small>
                               </div>
                             </div>
                           )}
@@ -924,6 +1215,15 @@ export default function CreateProduct() {
                   >
                     Reset Form
                   </button>
+
+                  {/* Debug Info */}
+                  <div className="p-3 bg-warning bg-opacity-10">
+                    <small className="text-muted">
+                      <strong>Vendor UID Debug:</strong> {currentUser.uid} |
+                      Role: {currentUser.role} | Name: {currentUser.name}
+                    </small>
+                  </div>
+
                   <button
                     type="submit"
                     className="btn btn-primary px-4 py-2 d-flex align-items-center gap-2"
@@ -931,7 +1231,10 @@ export default function CreateProduct() {
                   >
                     {loading ? (
                       <>
-                        <div className="spinner-border spinner-border-sm" role="status">
+                        <div
+                          className="spinner-border spinner-border-sm"
+                          role="status"
+                        >
                           <span className="visually-hidden">Loading...</span>
                         </div>
                         Creating Product...
@@ -952,4 +1255,3 @@ export default function CreateProduct() {
     </div>
   );
 }
-

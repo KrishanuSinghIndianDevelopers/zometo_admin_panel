@@ -34,9 +34,9 @@ import {
   Home,
   ShoppingCart,
   Users,
-  Settings
+  Settings,
+  Store
 } from 'lucide-react';
-
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState([]);
@@ -46,61 +46,116 @@ export default function OrdersPage() {
   const [selectedDate, setSelectedDate] = useState('');
   const [categoryCounts, setCategoryCounts] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // ✅ NEW: Vendor/Admin Filter States
+  const [currentUser, setCurrentUser] = useState(null);
+  const [vendorFilter, setVendorFilter] = useState('all');
+  const [uniqueVendors, setUniqueVendors] = useState([]);
 
   useEffect(() => {
-    const fetchOrders = async () => {
-      try {
-        const ordersRef = collection(db, 'orders');
-        const q = query(ordersRef, orderBy('orderDate', 'desc'));
-        const snapshot = await getDocs(q);
-
-        const data = snapshot.docs.map(doc => {
-          const order = doc.data();
-          let orderDate;
-          if (order.orderDate instanceof Timestamp) {
-            orderDate = order.orderDate.toDate();
-          } else if (typeof order.orderDate === 'string') {
-            orderDate = new Date(order.orderDate);
-          } else {
-            orderDate = new Date();
-          }
-          return {
-            id: doc.id,
-            ...order,
-            orderDate,
-          };
-        });
-
-        setOrders(data);
-        setFilteredOrders(data);
-
-        const allCats = new Set();
-        const catCount = {};
-        data.forEach(order => {
-          order.items?.forEach(item => {
-            if (item.categoryName) {
-              allCats.add(item.categoryName);
-              catCount[item.categoryName] =
-                (catCount[item.categoryName] || 0) + parseInt(item.quantity || 0);
-            }
-          });
-        });
-
-        setCategories(['All', ...Array.from(allCats)]);
-        setCategoryCounts(
-          Object.entries(catCount).map(([name, qty]) => ({ name, qty }))
-        );
-      } catch (error) {
-        console.error('Error fetching orders:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchOrders();
+    checkAuthAndFetchOrders();
   }, []);
 
+  // ✅ NEW: Check authentication and user role
+  const checkAuthAndFetchOrders = () => {
+    const isLoggedIn = localStorage.getItem('isLoggedIn');
+    const userData = localStorage.getItem('user');
+
+    if (!isLoggedIn || !userData) {
+      router.push('/login');
+      return;
+    }
+
+    const userObj = JSON.parse(userData);
+    console.log('Current User:', userObj);
+    setCurrentUser(userObj);
+    fetchOrders(userObj);
+  };
+
+  // ✅ UPDATED: Fetch orders with vendor/admin logic
+  const fetchOrders = async (userObj) => {
+    try {
+      setLoading(true);
+      const isAdminUser = userObj.role === 'admin' || userObj.role === 'main_admin';
+      
+      const ordersRef = collection(db, 'orders');
+      const q = query(ordersRef, orderBy('orderDate', 'desc'));
+      const snapshot = await getDocs(q);
+
+      let data = snapshot.docs.map(doc => {
+        const order = doc.data();
+        let orderDate;
+        if (order.orderDate instanceof Timestamp) {
+          orderDate = order.orderDate.toDate();
+        } else if (typeof order.orderDate === 'string') {
+          orderDate = new Date(order.orderDate);
+        } else {
+          orderDate = new Date();
+        }
+        return {
+          id: doc.id,
+          ...order,
+          orderDate,
+        };
+      });
+
+      // ✅ Filter orders based on user role
+      if (!isAdminUser) {
+        // Vendor: Show only their own orders
+        const vendorId = userObj.documentId || userObj.uid;
+        data = data.filter(order => order.vendorId === vendorId);
+      }
+
+      setOrders(data);
+      setFilteredOrders(data);
+
+      // ✅ Extract unique vendors for admin filter
+      if (isAdminUser) {
+        const vendors = [...new Set(data.map(order => order.vendorId).filter(Boolean))];
+        console.log('📊 Unique vendors:', vendors);
+        setUniqueVendors(vendors);
+      }
+
+      // Category logic (existing)
+      const allCats = new Set();
+      const catCount = {};
+      data.forEach(order => {
+        order.items?.forEach(item => {
+          if (item.categoryName) {
+            allCats.add(item.categoryName);
+            catCount[item.categoryName] =
+              (catCount[item.categoryName] || 0) + parseInt(item.quantity || 0);
+          }
+        });
+      });
+
+      setCategories(['All', ...Array.from(allCats)]);
+      setCategoryCounts(
+        Object.entries(catCount).map(([name, qty]) => ({ name, qty }))
+      );
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ✅ UPDATED: Apply all filters including vendor filter
   useEffect(() => {
     let filtered = [...orders];
+    
+    // Vendor Filter
+    if (vendorFilter !== 'all') {
+      if (vendorFilter === 'admin_only') {
+        filtered = filtered.filter(order => 
+          !order.vendorId || order.vendorRole === 'admin' || order.vendorRole === 'main_admin'
+        );
+      } else {
+        filtered = filtered.filter(order => order.vendorId === vendorFilter);
+      }
+    }
+    
+    // Date Filter
     if (selectedDate) {
       const selected = new Date(selectedDate);
       selected.setHours(0, 0, 0, 0);
@@ -110,13 +165,25 @@ export default function OrdersPage() {
         return orderDate.getTime() === selected.getTime();
       });
     }
+    
+    // Category Filter
     if (selectedCategory !== 'All') {
       filtered = filtered.filter(order =>
         order.items?.some(item => item.categoryName === selectedCategory)
       );
     }
+    
     setFilteredOrders(filtered);
-  }, [orders, selectedCategory, selectedDate]);
+  }, [orders, vendorFilter, selectedCategory, selectedDate]);
+
+  // ✅ NEW: Get vendor display name
+  const getVendorDisplayName = (vendorId) => {
+    const vendorOrders = orders.filter(order => order.vendorId === vendorId);
+    if (vendorOrders.length > 0) {
+      return vendorOrders[0]?.vendorName || `Vendor: ${vendorId.substring(0, 10)}...`;
+    }
+    return `Vendor: ${vendorId.substring(0, 10)}...`;
+  };
 
   const getStatusBadge = (status) => {
     const statusColors = {
@@ -140,16 +207,17 @@ export default function OrdersPage() {
     });
   };
 
-  // Calculate stats
-  const totalRevenue = orders.reduce((sum, order) => sum + (order.totalAmount || 0), 0);
-  const totalDiscount = orders.reduce((sum, order) => sum + (order.totalDiscount || 0), 0);
-  const totalOrders = orders.length;
+  // Calculate stats based on filtered orders
+  const totalRevenue = filteredOrders.reduce((sum, order) => sum + (order.totalAmount || 0), 0);
+  const totalDiscount = filteredOrders.reduce((sum, order) => sum + (order.totalDiscount || 0), 0);
+  const totalOrders = filteredOrders.length;
+
+  const isAdminUser = currentUser?.role === 'admin' || currentUser?.role === 'main_admin';
 
   return (
     <div className="d-flex" style={{ minHeight: '100vh' }}>
-     
-         <div className="d-flex" style={{ minHeight: '100vh' }}>
-      <Sidebar />
+      <div className="d-flex" style={{ minHeight: '100vh' }}>
+        <Sidebar />
       </div>
 
       {/* Main Content */}
@@ -158,13 +226,17 @@ export default function OrdersPage() {
         <div className="p-4 border-bottom bg-white">
           <div className="d-flex justify-content-between align-items-center mb-3">
             <div>
-              <h2 className="fw-bold text-dark mb-1">Orders Management</h2>
-              <p className="text-muted mb-0">View and manage customer orders</p>
+              <h2 className="fw-bold text-dark mb-1">
+                {isAdminUser ? 'All Orders Management' : 'My Orders Management'}
+              </h2>
+              <p className="text-muted mb-0">
+                {isAdminUser ? 'View and manage all orders' : 'View and manage your orders'}
+              </p>
             </div>
             <div className="text-end">
               <div className="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 px-3 py-2">
                 <Package size={16} className="me-1" />
-                {totalOrders} Total Orders
+                {totalOrders} {isAdminUser ? 'Total' : 'My'} Orders
               </div>
             </div>
           </div>
@@ -214,6 +286,37 @@ export default function OrdersPage() {
 
           {/* Filters */}
           <div className="row g-3">
+            {/* Vendor Filter - Only for Admin */}
+            {isAdminUser && (
+              <div className="col-md-4">
+                <label className="form-label fw-medium text-dark">Filter by Vendor</label>
+                <div className="input-group">
+                  <span className="input-group-text bg-light border-0">
+                    <Users size={18} />
+                  </span>
+                  <select
+                    className="form-select border-0 bg-light"
+                    value={vendorFilter}
+                    onChange={(e) => setVendorFilter(e.target.value)}
+                  >
+                    <option value="all">All Vendors ({orders.length})</option>
+                    <option value="admin_only">
+                      Admin Orders Only ({orders.filter(o => !o.vendorId || o.vendorRole === 'admin' || o.vendorRole === 'main_admin').length})
+                    </option>
+                    {uniqueVendors.map(vendor => {
+                      const vendorOrders = orders.filter(order => order.vendorId === vendor);
+                      const vendorName = getVendorDisplayName(vendor);
+                      return (
+                        <option key={vendor} value={vendor}>
+                          {vendorName} ({vendorOrders.length})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              </div>
+            )}
+
             <div className="col-md-4">
               <label className="form-label fw-medium text-dark">Filter by Date</label>
               <div className="input-group">
@@ -228,6 +331,7 @@ export default function OrdersPage() {
                 />
               </div>
             </div>
+            
             <div className="col-md-4">
               <label className="form-label fw-medium text-dark">Filter by Category</label>
               <div className="input-group">
@@ -245,11 +349,19 @@ export default function OrdersPage() {
                 </select>
               </div>
             </div>
-            <div className="col-md-4">
-              <label className="form-label fw-medium text-dark">Results</label>
+          </div>
+
+          {/* Results Count */}
+          <div className="row mt-3">
+            <div className="col-12">
               <div className="p-2 bg-light rounded border-0">
                 <small className="text-muted">
                   Showing {filteredOrders.length} of {orders.length} orders
+                  {isAdminUser && vendorFilter !== 'all' && (
+                    <span className="text-primary fw-medium">
+                      {vendorFilter === 'admin_only' ? ' (Admin Orders Only)' : ` (Vendor: ${getVendorDisplayName(vendorFilter)})`}
+                    </span>
+                  )}
                 </small>
               </div>
             </div>
@@ -282,6 +394,7 @@ export default function OrdersPage() {
                         <thead className="table-light">
                           <tr>
                             <th className="ps-4 py-3 fw-semibold text-dark">Customer</th>
+                            {isAdminUser && <th className="py-3 fw-semibold text-dark">Vendor</th>}
                             <th className="py-3 fw-semibold text-dark">Order Details</th>
                             <th className="py-3 fw-semibold text-dark">Amount</th>
                             <th className="py-3 fw-semibold text-dark">Status</th>
@@ -305,6 +418,22 @@ export default function OrdersPage() {
                                   </div>
                                 </div>
                               </td>
+
+                              {/* Vendor Info - Only for Admin */}
+                              {isAdminUser && (
+                                <td>
+                                  <div className="d-flex align-items-center gap-1">
+                                    {order.vendorRole === 'vendor' ? (
+                                      <Store size={14} className="text-warning" />
+                                    ) : (
+                                      <Users size={14} className="text-primary" />
+                                    )}
+                                    <small className="text-muted">
+                                      {order.vendorName || (order.vendorRole === 'admin' ? 'Admin' : `Vendor: ${order.vendorId?.substring(0, 8)}...`)}
+                                    </small>
+                                  </div>
+                                </td>
+                              )}
 
                               {/* Order Details */}
                               <td>
@@ -391,7 +520,10 @@ export default function OrdersPage() {
               <div className="col-12">
                 <div className="card border-0 shadow-sm">
                   <div className="card-body">
-                    <h5 className="fw-semibold text-dark mb-4">Category-wise Sales Performance</h5>
+                    <h5 className="fw-semibold text-dark mb-4">
+                      {isAdminUser && vendorFilter !== 'all' ? 'Filtered ' : ''}
+                      Category-wise Sales Performance
+                    </h5>
                     <ResponsiveContainer width="100%" height={300}>
                       <BarChart data={categoryCounts}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
