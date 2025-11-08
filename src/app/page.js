@@ -116,7 +116,7 @@ export default function HomePage() {
     { title: 'Coupons', icon: 'bi-ticket-perforated-fill', color: 'bg-light-yellow', link: '/coupons' },
     { title: 'Feed Back', icon: 'bi-person-lines-fill', color: 'bg-light-pink', link: '/contacts' },
     { title: 'Category', icon: 'bi-newspaper', color: 'bg-light-green', link: '/categories' },
-    { title: 'Category Slider', icon: 'bi-images', color: 'bg-light-cyan', link: '/CategorySlider' },
+    // { title: 'Category Slider', icon: 'bi-images', color: 'bg-light-cyan', link: '/CategorySlider' },
     { 
       title: 'My Account', 
       icon: 'bi-person-circle', 
@@ -160,7 +160,7 @@ export default function HomePage() {
         {/* Welcome Message with Admin Badge */}
         <div className="d-flex justify-content-between align-items-center mb-4">
           <div>
-            <h1 className="mb-2 fw-bold">Dashboard</h1>
+            <h1 className="mb-2 fw-bold">Home</h1>
             <p className="text-muted mb-0">
               Welcome back{user ? `, ${user.name || user.email}` : ''}!
               {isMainAdmin && (

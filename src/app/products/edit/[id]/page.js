@@ -3,7 +3,16 @@ import Sidebar from '../../../../components/Sidebar';
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { db } from '../../../../firebase/firebase';
-import { collection, doc, getDoc, updateDoc, Timestamp, getDocs, query, where } from 'firebase/firestore';
+import { 
+  doc, 
+  getDoc, 
+  updateDoc, 
+  collection, 
+  getDocs, 
+  query, 
+  where,
+  Timestamp 
+} from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { 
   Save, 
@@ -14,15 +23,16 @@ import {
   Ruler,
   Scale,
   Hash,
-  ArrowLeft,
-  Gift
+  Plus,
+  Gift,
+  ArrowLeft
 } from 'lucide-react';
 
 export default function EditProduct() {
   const router = useRouter();
   const params = useParams();
   const productId = params.id;
-
+  
   const [loading, setLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(true);
   const [image, setImage] = useState(null);
@@ -32,15 +42,16 @@ export default function EditProduct() {
   const [subCategories, setSubCategories] = useState([]);
   const [nestedSubCategories, setNestedSubCategories] = useState([]);
   const [availableProducts, setAvailableProducts] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [vendorUid, setVendorUid] = useState(null);
 
-  // Status options
+  // ✅ Status options - same as create page
   const statusOptions = [
-    { value: 'upcoming', label: '🟡 Upcoming', color: 'warning' },
-    { value: 'available', label: '🟢 Available', color: 'success' },
-    { value: 'cancelled', label: '🔴 Cancelled', color: 'danger' }
+    { value: 'Not Available', label: 'Not Available', color: 'warning' },
+    { value: 'available', label: 'Available', color: 'success' }
   ];
 
-  // Form states - Updated to match create product structure with offers
+  // Form states
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -50,16 +61,17 @@ export default function EditProduct() {
     subCategoryName: '',
     nestedSubCategoryId: '',
     nestedSubCategoryName: '',
-    amount: '',
+    sellingPrice: '',
     originalPrice: '',
-    discountedAmount: '0',
+    discountedAmount: '',
     foodType: 'veg',
     size: '',
     unit: '',
+    customUnit: '',
     quantity: '',
     priority: '',
     status: 'available',
-    // New offer fields
+    // Offer fields
     offerType: 'none',
     buyX: '',
     getY: '',
@@ -81,7 +93,8 @@ export default function EditProduct() {
     { value: 'ml', label: 'Milliliter (ml)' },
     { value: 'piece', label: 'Piece' },
     { value: 'pack', label: 'Pack' },
-    { value: 'bottle', label: 'Bottle' }
+    { value: 'bottle', label: 'Bottle' },
+    { value: 'any', label: 'Any (custom)' }
   ];
 
   const sizes = [
@@ -102,19 +115,147 @@ export default function EditProduct() {
     { value: 'bxgyf', label: 'Buy X Get Y Free (Different Product)' }
   ];
 
-  useEffect(() => {
-    if (productId) {
-      fetchCategories();
-      fetchAvailableProducts();
+  // Helper function to generate offer text
+  const generateOfferText = (data) => {
+    switch(data.offerType) {
+      case 'bogo':
+        return 'Buy 1 Get 1 Free!';
+      case 'bxgy':
+        return `Buy ${data.buyX || 'X'} Get ${data.getY || 'Y'} Free!`;
+      case 'bogof':
+        return 'Buy 1 Get 1 Free (Different Product)!';
+      case 'bxgyf':
+        return `Buy ${data.buyX || 'X'} Get ${data.getY || 'Y'} Free (Different Product)!`;
+      default:
+        return 'No active offer';
     }
-  }, [productId]);
+  };
 
-  // Fetch categories first, then product data
   useEffect(() => {
-    if (categories.length > 0 && productId) {
-      fetchProductData();
+    checkAuthAndRole();
+  }, []);
+
+  const checkAuthAndRole = async () => {
+    const isLoggedIn = localStorage.getItem('isLoggedIn');
+    const userData = localStorage.getItem('user');
+
+    if (!isLoggedIn || !userData) {
+      router.push('/login');
+      return;
     }
-  }, [categories, productId]);
+
+    const userObj = JSON.parse(userData);
+    console.log('Current User:', userObj);
+    setCurrentUser(userObj);
+    
+    if (userObj.role === 'vendor') {
+      await getVendorUid(userObj.email);
+    }
+    
+    await fetchCategories();
+    await fetchAvailableProducts(userObj);
+    await fetchProductData();
+  };
+
+  const getVendorUid = async (email) => {
+    try {
+      const vendorsQuery = query(
+        collection(db, 'vendors'),
+        where('email', '==', email)
+      );
+      
+      const vendorsSnapshot = await getDocs(vendorsQuery);
+      if (!vendorsSnapshot.empty) {
+        const vendorDoc = vendorsSnapshot.docs[0];
+        const vendorUid = vendorDoc.id;
+        const vendorData = vendorDoc.data();
+        
+        console.log('✅ Vendor UID found:', vendorUid);
+        console.log('✅ Vendor data:', vendorData);
+        
+        setVendorUid(vendorUid);
+        return vendorUid;
+      } else {
+        console.error('❌ No vendor found for email:', email);
+        return null;
+      }
+    } catch (error) {
+      console.error('❌ Error getting vendor UID:', error);
+      return null;
+    }
+  };
+
+  // Fetch product data
+  const fetchProductData = async () => {
+    try {
+      setFetchLoading(true);
+      if (!productId) {
+        console.error('No product ID provided');
+        return;
+      }
+
+      const productDoc = await getDoc(doc(db, 'products', productId));
+      
+      if (!productDoc.exists()) {
+        console.error('Product not found');
+        alert('Product not found!');
+        router.push('/products');
+        return;
+      }
+
+      const productData = productDoc.data();
+      console.log('Fetched product data:', productData);
+
+      // Set form data with product values
+      const formData = {
+        title: productData.title || '',
+        description: productData.description || '',
+        categoryId: productData.categoryId || '',
+        categoryName: productData.categoryName || '',
+        subCategoryId: productData.subCategoryId || '',
+        subCategoryName: productData.subCategoryName || '',
+        nestedSubCategoryId: productData.nestedSubCategoryId || '',
+        nestedSubCategoryName: productData.nestedSubCategoryName || '',
+        sellingPrice: productData.sellingPrice?.toString() || productData.amount?.toString() || '',
+        originalPrice: productData.originalPrice?.toString() || '',
+        discountedAmount: productData.discountedAmount?.toString() || '0',
+        foodType: productData.foodType || 'veg',
+        size: productData.size || '',
+        unit: productData.unit || '',
+        customUnit: productData.customUnit || '',
+        quantity: productData.quantity?.toString() || '',
+        priority: productData.priority?.toString() || '5',
+        status: productData.status || 'available',
+        offerType: productData.offerType || 'none',
+        buyX: productData.buyX?.toString() || '',
+        getY: productData.getY?.toString() || '',
+        freeProductId: productData.freeProductId || '',
+        maxQuantity: productData.maxQuantity?.toString() || '',
+        offerDescription: productData.offerDescription || ''
+      };
+
+      setFormData(formData);
+
+      // Set image preview
+      if (productData.imageUrl) {
+        setPreview(productData.imageUrl);
+      }
+
+      // Fetch subcategories if category exists
+      if (formData.categoryId) {
+        await fetchSubCategories(formData.categoryId, 0);
+      }
+      if (formData.subCategoryId) {
+        await fetchSubCategories(formData.subCategoryId, 1);
+      }
+
+    } catch (error) {
+      console.error('Error fetching product data:', error);
+      alert('Failed to load product data!');
+    } finally {
+      setFetchLoading(false);
+    }
+  };
 
   // Filter categories based on food type
   useEffect(() => {
@@ -124,7 +265,6 @@ export default function EditProduct() {
       );
       setFilteredCategories(filtered);
       
-      // Reset category if current selection doesn't match food type
       if (formData.categoryId) {
         const currentCategory = categories.find(cat => cat.id === formData.categoryId);
         if (currentCategory && currentCategory.foodType !== formData.foodType) {
@@ -144,11 +284,11 @@ export default function EditProduct() {
     }
   }, [formData.foodType, categories]);
 
-  // Calculate discounted amount when prices change
+  // ✅ Calculate discounted amount when prices change
   useEffect(() => {
-    if (formData.originalPrice && formData.amount) {
+    if (formData.originalPrice && formData.sellingPrice) {
       const original = parseFloat(formData.originalPrice);
-      const selling = parseFloat(formData.amount);
+      const selling = parseFloat(formData.sellingPrice);
       const discounted = original - selling;
       setFormData(prev => ({
         ...prev,
@@ -160,7 +300,7 @@ export default function EditProduct() {
         discountedAmount: '0'
       }));
     }
-  }, [formData.originalPrice, formData.amount]);
+  }, [formData.originalPrice, formData.sellingPrice]);
 
   // Reset offer fields when offer type changes to 'none'
   useEffect(() => {
@@ -176,81 +316,6 @@ export default function EditProduct() {
     }
   }, [formData.offerType]);
 
-  const fetchProductData = async () => {
-    try {
-      setFetchLoading(true);
-      const docRef = doc(db, 'products', productId);
-      const docSnap = await getDoc(docRef);
-
-      if (docSnap.exists()) {
-        const productData = docSnap.data();
-        
-        // Find category by name to get ID
-        let categoryId = '';
-        let subCategoryId = '';
-        let nestedSubCategoryId = '';
-        
-        if (productData.categoryName && categories.length > 0) {
-          const foundCategory = categories.find(cat => cat.name === productData.categoryName);
-          if (foundCategory) {
-            categoryId = foundCategory.id;
-          }
-        }
-
-        // Set form data with all fields including offers
-        setFormData({
-          title: productData.title || '',
-          description: productData.description || '',
-          categoryId: categoryId,
-          categoryName: productData.categoryName || '',
-          subCategoryId: productData.subCategoryId || '',
-          subCategoryName: productData.subCategoryName || '',
-          nestedSubCategoryId: productData.nestedSubCategoryId || '',
-          nestedSubCategoryName: productData.nestedSubCategoryName || '',
-          amount: productData.amount?.toString() || '',
-          originalPrice: productData.originalPrice?.toString() || '',
-          discountedAmount: productData.discountedAmount?.toString() || '0',
-          foodType: productData.foodType || 'veg',
-          size: productData.size || '',
-          unit: productData.unit || '',
-          quantity: productData.quantity?.toString() || '',
-          priority: productData.priority?.toString() || '5',
-          status: productData.status || 'available',
-          // Offer fields
-          offerType: productData.offerType || 'none',
-          buyX: productData.buyX?.toString() || '',
-          getY: productData.getY?.toString() || '',
-          freeProductId: productData.freeProductId || '',
-          maxQuantity: productData.maxQuantity?.toString() || '',
-          offerDescription: productData.offerDescription || ''
-        });
-
-        if (productData.imageUrl) {
-          setPreview(productData.imageUrl);
-        }
-
-        // Fetch subcategories if category is set
-        if (categoryId) {
-          await fetchSubCategories(categoryId, 0);
-        }
-
-        // If there's a subcategory, fetch nested subcategories
-        if (productData.subCategoryId) {
-          await fetchSubCategories(productData.subCategoryId, 1);
-        }
-      } else {
-        alert('Product not found!');
-        router.push('/products');
-      }
-    } catch (error) {
-      console.error('Error fetching product:', error);
-      alert('Failed to fetch product data!');
-      router.push('/products');
-    } finally {
-      setFetchLoading(false);
-    }
-  };
-
   const fetchCategories = async () => {
     try {
       const q = query(collection(db, 'categories'), where('isMainCategory', '==', true));
@@ -260,24 +325,53 @@ export default function EditProduct() {
         ...doc.data(),
       }));
       setCategories(categoriesData);
+      setFilteredCategories(categoriesData);
+      console.log("Categories loaded:", categoriesData.length);
     } catch (error) {
       console.error('Error fetching categories:', error);
     }
   };
 
-  const fetchAvailableProducts = async () => {
+  const fetchAvailableProducts = async (userObj) => {
     try {
-      const q = query(collection(db, 'products'), where('status', '==', 'available'));
+      let q;
+      
+      if (userObj.role === 'main_admin' || userObj.role === 'admin') {
+        q = query(collection(db, 'products'), where('status', '==', 'available'));
+        console.log("Fetching all products for admin");
+      } else {
+        if (vendorUid) {
+          q = query(
+            collection(db, 'products'), 
+            where('status', '==', 'available'),
+            where('vendorId', '==', vendorUid)
+          );
+          console.log("Fetching vendor products with UID:", vendorUid);
+        } else {
+          console.log("Vendor UID not available yet");
+          setAvailableProducts([]);
+          return;
+        }
+      }
+      
       const querySnapshot = await getDocs(q);
       const productsData = querySnapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       }));
       setAvailableProducts(productsData);
+      console.log("Available products loaded:", productsData.length);
     } catch (error) {
       console.error('Error fetching products:', error);
+      setAvailableProducts([]);
     }
   };
+
+  useEffect(() => {
+    if (currentUser && vendorUid) {
+      fetchAvailableProducts(currentUser);
+    }
+  }, [vendorUid]);
 
   const fetchSubCategories = async (parentId, level = 0) => {
     try {
@@ -296,22 +390,11 @@ export default function EditProduct() {
       }
     } catch (error) {
       console.error('Error fetching subcategories:', error);
-    }
-  };
-
-  // Helper function to generate offer text
-  const generateOfferText = (data) => {
-    switch(data.offerType) {
-      case 'bogo':
-        return 'Buy 1 Get 1 Free!';
-      case 'bxgy':
-        return `Buy ${data.buyX || 'X'} Get ${data.getY || 'Y'} Free!`;
-      case 'bogof':
-        return 'Buy 1 Get 1 Free (Different Product)!';
-      case 'bxgyf':
-        return `Buy ${data.buyX || 'X'} Get ${data.getY || 'Y'} Free (Different Product)!`;
-      default:
-        return 'No active offer';
+      if (level === 0) {
+        setSubCategories([]);
+      } else if (level === 1) {
+        setNestedSubCategories([]);
+      }
     }
   };
 
@@ -319,7 +402,6 @@ export default function EditProduct() {
     const { name, value } = e.target;
     
     if (name === 'categoryId') {
-      // When category changes, update both ID and name
       const selectedCategory = categories.find(cat => cat.id === value);
       setFormData(prev => ({
         ...prev,
@@ -339,7 +421,6 @@ export default function EditProduct() {
       }
     }
     else if (name === 'subCategoryId') {
-      // When subcategory changes, update both ID and name
       const selectedSubCategory = subCategories.find(subCat => subCat.id === value);
       setFormData(prev => ({
         ...prev,
@@ -356,7 +437,6 @@ export default function EditProduct() {
       }
     }
     else if (name === 'nestedSubCategoryId') {
-      // When nested subcategory changes, update both ID and name
       const selectedNestedSubCategory = nestedSubCategories.find(nestedCat => nestedCat.id === value);
       setFormData(prev => ({
         ...prev,
@@ -365,7 +445,6 @@ export default function EditProduct() {
       }));
     }
     else if (name === 'offerType') {
-      // When offer type changes, auto-generate description
       setFormData(prev => {
         const newData = {
           ...prev,
@@ -378,7 +457,6 @@ export default function EditProduct() {
       });
     }
     else if (name === 'buyX' || name === 'getY') {
-      // When buyX or getY changes, update offer description
       setFormData(prev => {
         const newData = {
           ...prev,
@@ -391,7 +469,6 @@ export default function EditProduct() {
       });
     }
     else {
-      // For all other fields
       setFormData(prev => ({
         ...prev,
         [name]: value
@@ -402,6 +479,16 @@ export default function EditProduct() {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
+      if (!file.type.startsWith('image/')) {
+        alert('Please select an image file');
+        return;
+      }
+      
+      if (file.size > 10 * 1024 * 1024) {
+        alert('Image size must be less than 10MB');
+        return;
+      }
+
       setImage(file);
       setPreview(URL.createObjectURL(file));
     }
@@ -410,14 +497,32 @@ export default function EditProduct() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
+    if (!currentUser) {
+      alert('User not authenticated!');
+      return;
+    }
+
+    // Validate required fields
     if (!formData.title || !formData.categoryId || !formData.originalPrice) {
       alert('Please fill all required fields.');
       return;
     }
 
+    // Validate image (only required for new products, optional for edits)
+    if (!preview && !image) {
+      alert('Please upload a product image.');
+      return;
+    }
+
     // Validate selling price is not greater than original price
-    if (formData.amount && parseFloat(formData.amount) > parseFloat(formData.originalPrice)) {
+    if (formData.sellingPrice && parseFloat(formData.sellingPrice) > parseFloat(formData.originalPrice)) {
       alert('Selling price cannot be greater than original price.');
+      return;
+    }
+
+    // Validate custom unit when "any" is selected
+    if (formData.unit === 'any' && !formData.customUnit) {
+      alert('Please enter a custom unit name when "Any (custom)" is selected.');
       return;
     }
 
@@ -433,51 +538,83 @@ export default function EditProduct() {
       }
     }
 
+    if (currentUser.role === 'vendor' && !vendorUid) {
+      alert('Vendor authentication failed. Please try logging in again.');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      let imageUrl = preview;
+      let imageUrl = preview; // Use existing image URL by default
 
-      // Upload new image if changed
+      // Upload new image if provided
       if (image) {
         const storage = getStorage();
         const imageRef = ref(storage, `products/${Date.now()}-${image.name}`);
         await uploadBytes(imageRef, image);
         imageUrl = await getDownloadURL(imageRef);
+        console.log("✅ New image uploaded successfully:", imageUrl);
       }
 
-      // Prepare product data - Using the same structure as create product
-      const sellingPrice = formData.amount || formData.originalPrice;
+      // Determine vendor UID and name
+      let finalVendorUid;
+      let finalVendorName;
+
+      if (currentUser.role === 'main_admin' || currentUser.role === 'admin') {
+        finalVendorUid = 'admin';
+        finalVendorName = 'Admin';
+      } else {
+        finalVendorUid = vendorUid;
+        finalVendorName = currentUser.restaurantName || currentUser.name || currentUser.email;
+        
+        if (!finalVendorUid) {
+          throw new Error('Vendor UID not found. Please contact admin.');
+        }
+      }
+
+      // ✅ Prepare product data for update
+      const sellingPrice = formData.sellingPrice || formData.originalPrice;
       const discountedAmount = formData.discountedAmount || '0';
+      const finalUnit = formData.unit === 'any' ? formData.customUnit : formData.unit;
       
       const productData = {
-        title: formData.title,
-        description: formData.description,
+        title: formData.title.trim(),
+        description: formData.description?.trim() || '',
         categoryId: formData.categoryId,
-        categoryName: formData.categoryName,
-        subCategoryName: formData.subCategoryName,
-        subCategoryId: formData.subCategoryId,
-        nestedSubCategoryName: formData.nestedSubCategoryName,
-        nestedSubCategoryId: formData.nestedSubCategoryId,
-        amount: parseFloat(sellingPrice),
+        categoryName: formData.categoryName || '',
+        subCategoryName: formData.subCategoryName || '',
+        subCategoryId: formData.subCategoryId || '',
+        nestedSubCategoryName: formData.nestedSubCategoryName || '',
+        nestedSubCategoryId: formData.nestedSubCategoryId || '',
+        sellingPrice: parseFloat(sellingPrice),
         originalPrice: parseFloat(formData.originalPrice),
-        discountedAmount: parseFloat(discountedAmount),
-        foodType: formData.foodType,
-        size: formData.size,
-        unit: formData.unit,
-        quantity: formData.quantity,
+        discountedAmount: Math.max(0, parseFloat(discountedAmount)),
+        foodType: formData.foodType || 'veg',
+        size: formData.size || '',
+        unit: finalUnit || '',
+        quantity: formData.quantity ? parseFloat(formData.quantity) : null,
         priority: parseInt(formData.priority) || 0,
         status: formData.status || 'available',
         // Offer fields
-        offerType: formData.offerType,
+        offerType: formData.offerType || 'none',
         buyX: formData.buyX ? parseInt(formData.buyX) : null,
         getY: formData.getY ? parseInt(formData.getY) : null,
         freeProductId: formData.freeProductId || null,
         maxQuantity: formData.maxQuantity ? parseInt(formData.maxQuantity) : 0,
         offerDescription: formData.offerDescription || generateOfferText(formData),
-        imageUrl,
+        // Vendor information
+        vendorId: finalVendorUid,
+        vendorName: finalVendorName,
         updatedAt: Timestamp.now(),
       };
+
+      // Add image URL only if it's new
+      if (imageUrl !== preview) {
+        productData.imageUrl = imageUrl;
+      }
+
+      console.log('✅ Final product data to update:', productData);
 
       // Remove empty fields
       Object.keys(productData).forEach(key => {
@@ -486,24 +623,35 @@ export default function EditProduct() {
         }
       });
 
-      // Update in Firestore
-      const productRef = doc(db, 'products', productId);
-      await updateDoc(productRef, productData);
+      // Update product in Firestore
+      await updateDoc(doc(db, 'products', productId), productData);
       
+      console.log('✅ Product updated successfully');
       alert('Product updated successfully!');
       router.push('/products');
     } catch (error) {
-      console.error('Error updating product:', error);
-      alert('Failed to update product!');
+      console.error('❌ Error updating product:', error);
+      alert('Failed to update product! ' + error.message);
     } finally {
       setLoading(false);
     }
   };
 
   const resetForm = () => {
+    // Reload original product data
     fetchProductData();
     setImage(null);
   };
+
+  if (!currentUser) {
+    return (
+      <div className="d-flex justify-content-center align-items-center min-vh-100">
+        <div className="spinner-border text-primary" role="status">
+          <span className="visually-hidden">Loading...</span>
+        </div>
+      </div>
+    );
+  }
 
   if (fetchLoading) {
     return (
@@ -513,15 +661,17 @@ export default function EditProduct() {
         </div>
         <div className="flex-grow-1 d-flex justify-content-center align-items-center">
           <div className="text-center">
-            <div className="spinner-border text-primary" role="status">
+            <div className="spinner-border text-primary mb-3" role="status">
               <span className="visually-hidden">Loading...</span>
             </div>
-            <p className="mt-3 text-muted">Loading product data...</p>
+            <p className="text-muted">Loading product data...</p>
           </div>
         </div>
       </div>
     );
   }
+
+  const isVendor = currentUser.role === 'vendor';
 
   return (
     <div className="d-flex" style={{ minHeight: '100vh', overflowX: 'hidden' }}>
@@ -537,14 +687,29 @@ export default function EditProduct() {
           <div className="d-flex justify-content-between align-items-center">
             <div>
               <button
-                className="btn btn-outline-primary btn-sm d-flex align-items-center gap-2 mb-2"
+                className="btn btn-outline-secondary btn-sm mb-2 d-flex align-items-center gap-2"
                 onClick={() => router.push('/products')}
               >
                 <ArrowLeft size={16} />
                 Back to Products
               </button>
               <h2 className="fw-bold text-dark mb-1">Edit Product</h2>
-              <p className="text-muted mb-0">Update product information</p>
+              <p className="text-muted mb-0">
+                {isVendor ? 'Update your food item details' : 'Update product information'}
+              </p>
+            </div>
+            <div className="d-flex align-items-center gap-3">
+              <div className="badge bg-primary bg-opacity-10 text-primary p-2">
+                Logged in as: <strong>{currentUser.role.toUpperCase()}</strong>
+              </div>
+              {isVendor && (
+                <div className="badge bg-success bg-opacity-10 text-success">
+                  Vendor: {currentUser.name}
+                </div>
+              )}
+              <div className="badge bg-info bg-opacity-10 text-info">
+                Product ID: {productId}
+              </div>
             </div>
           </div>
         </div>
@@ -554,21 +719,26 @@ export default function EditProduct() {
           <div className="card border-0 shadow-lg rounded-4">
             <div className="card-body p-4 p-md-5">
               <form onSubmit={handleSubmit}>
-                
                 {/* Table-like layout for form */}
                 <div>
                   <table className="table table-borderless w-100">
                     <thead>
                       <tr>
-                        <th width="20%" className="text-dark fw-semibold">Field</th>
-                        <th width="80%" className="text-dark fw-semibold">Value</th>
+                        <th width="20%" className="text-dark fw-semibold">
+                          Field
+                        </th>
+                        <th width="80%" className="text-dark fw-semibold">
+                          Value
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {/* Product Name (Single field) */}
+                      {/* Product Name */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Product Name *</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Product Name *
+                          </label>
                         </td>
                         <td>
                           <input
@@ -582,11 +752,13 @@ export default function EditProduct() {
                           />
                         </td>
                       </tr>
-                      
+
                       {/* Description */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Description</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Description
+                          </label>
                         </td>
                         <td>
                           <textarea
@@ -599,29 +771,37 @@ export default function EditProduct() {
                           />
                         </td>
                       </tr>
-                      
+
                       {/* Food Type & Category */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Food Type & Category</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Food Type & Category
+                          </label>
                         </td>
                         <td>
                           <div className="row g-3">
                             <div className="col-md-3">
-                              <label className="form-label fw-medium text-dark mb-1">Food Type</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Food Type
+                              </label>
                               <select
                                 className="form-select"
                                 name="foodType"
                                 value={formData.foodType}
                                 onChange={handleInputChange}
                               >
-                                {foodTypes.map(type => (
-                                  <option key={type.value} value={type.value}>{type.label}</option>
+                                {foodTypes.map((type) => (
+                                  <option key={type.value} value={type.value}>
+                                    {type.label}
+                                  </option>
                                 ))}
                               </select>
                             </div>
                             <div className="col-md-3">
-                              <label className="form-label fw-medium text-dark mb-1">Category *</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Category *
+                              </label>
                               <select
                                 className="form-select"
                                 name="categoryId"
@@ -630,14 +810,18 @@ export default function EditProduct() {
                                 required
                               >
                                 <option value="">Select Category</option>
-                                {filteredCategories.map(cat => (
-                                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                                {filteredCategories.map((cat) => (
+                                  <option key={cat.id} value={cat.id}>
+                                    {cat.name}
+                                  </option>
                                 ))}
                               </select>
                             </div>
                             {subCategories.length > 0 && (
                               <div className="col-md-3">
-                                <label className="form-label fw-medium text-dark mb-1">Subcategory</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Subcategory
+                                </label>
                                 <select
                                   className="form-select"
                                   name="subCategoryId"
@@ -645,9 +829,10 @@ export default function EditProduct() {
                                   onChange={handleInputChange}
                                 >
                                   <option value="">Select Subcategory</option>
-                                  {subCategories.map(subCat => (
+                                  {subCategories.map((subCat) => (
                                     <option key={subCat.id} value={subCat.id}>
-                                      {subCat.level > 0 ? '↳ ' : ''}{subCat.name}
+                                      {subCat.level > 0 ? "↳ " : ""}
+                                      {subCat.name}
                                     </option>
                                   ))}
                                 </select>
@@ -655,17 +840,25 @@ export default function EditProduct() {
                             )}
                             {nestedSubCategories.length > 0 && (
                               <div className="col-md-3">
-                                <label className="form-label fw-medium text-dark mb-1">Sub-Subcategory</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Sub-Subcategory
+                                </label>
                                 <select
                                   className="form-select"
                                   name="nestedSubCategoryId"
                                   value={formData.nestedSubCategoryId}
                                   onChange={handleInputChange}
                                 >
-                                  <option value="">Select Sub-Subcategory</option>
-                                  {nestedSubCategories.map(nestedCat => (
-                                    <option key={nestedCat.id} value={nestedCat.id}>
-                                      {'↳ '.repeat(nestedCat.level)}{nestedCat.name}
+                                  <option value="">
+                                    Select Sub-Subcategory
+                                  </option>
+                                  {nestedSubCategories.map((nestedCat) => (
+                                    <option
+                                      key={nestedCat.id}
+                                      value={nestedCat.id}
+                                    >
+                                      {"↳ ".repeat(nestedCat.level)}
+                                      {nestedCat.name}
                                     </option>
                                   ))}
                                 </select>
@@ -674,16 +867,20 @@ export default function EditProduct() {
                           </div>
                         </td>
                       </tr>
-                      
+
                       {/* Pricing */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Pricing</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Pricing
+                          </label>
                         </td>
                         <td>
                           <div className="row">
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Original Price (₹) *</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Original Price (₹) *
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -697,21 +894,26 @@ export default function EditProduct() {
                               />
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Selling Price (₹)</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Selling Price (₹) *
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
-                                name="amount"
-                                value={formData.amount}
+                                name="sellingPrice"
+                                value={formData.sellingPrice}
                                 onChange={handleInputChange}
                                 placeholder="0.00"
                                 step="0.01"
                                 min="0"
-                                max={formData.originalPrice || ''}
+                                max={formData.originalPrice || ""}
+                                required
                               />
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Discount Amount (₹)</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Discount Amount (₹)
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -723,12 +925,19 @@ export default function EditProduct() {
                                 min="0"
                                 readOnly
                               />
-                              <small className="text-muted">Auto-calculated</small>
+                              <small className="text-muted">
+                                Auto-calculated
+                              </small>
                             </div>
                           </div>
                           <small className="text-muted mt-2 d-block">
-                            {formData.amount && formData.originalPrice && parseFloat(formData.amount) > parseFloat(formData.originalPrice) ? (
-                              <span className="text-danger">Selling price cannot be more than original price</span>
+                            {formData.sellingPrice &&
+                            formData.originalPrice &&
+                            parseFloat(formData.sellingPrice) >
+                              parseFloat(formData.originalPrice) ? (
+                              <span className="text-danger">
+                                Selling price cannot be more than original price
+                              </span>
                             ) : (
                               "Selling price must be less than or equal to original price"
                             )}
@@ -747,24 +956,31 @@ export default function EditProduct() {
                         <td>
                           <div className="row g-3">
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Offer Type</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Offer Type
+                              </label>
                               <select
                                 className="form-select"
                                 name="offerType"
                                 value={formData.offerType}
                                 onChange={handleInputChange}
                               >
-                                {offerTypes.map(type => (
-                                  <option key={type.value} value={type.value}>{type.label}</option>
+                                {offerTypes.map((type) => (
+                                  <option key={type.value} value={type.value}>
+                                    {type.label}
+                                  </option>
                                 ))}
                               </select>
                             </div>
 
                             {/* Show these fields only when BXGY offer is selected */}
-                            {(formData.offerType === 'bxgy' || formData.offerType === 'bxgyf') && (
+                            {(formData.offerType === "bxgy" ||
+                              formData.offerType === "bxgyf") && (
                               <>
                                 <div className="col-md-4">
-                                  <label className="form-label fw-medium text-dark mb-1">Buy Quantity (X)</label>
+                                  <label className="form-label fw-medium text-dark mb-1">
+                                    Buy Quantity (X)
+                                  </label>
                                   <input
                                     type="number"
                                     className="form-control"
@@ -776,7 +992,9 @@ export default function EditProduct() {
                                   />
                                 </div>
                                 <div className="col-md-4">
-                                  <label className="form-label fw-medium text-dark mb-1">Get Free Quantity (Y)</label>
+                                  <label className="form-label fw-medium text-dark mb-1">
+                                    Get Free Quantity (Y)
+                                  </label>
                                   <input
                                     type="number"
                                     className="form-control"
@@ -791,9 +1009,12 @@ export default function EditProduct() {
                             )}
 
                             {/* Show for different product offers */}
-                            {(formData.offerType === 'bogof' || formData.offerType === 'bxgyf') && (
+                            {(formData.offerType === "bogof" ||
+                              formData.offerType === "bxgyf") && (
                               <div className="col-md-6">
-                                <label className="form-label fw-medium text-dark mb-1">Free Product</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Free Product
+                                </label>
                                 <select
                                   className="form-select"
                                   name="freeProductId"
@@ -801,9 +1022,9 @@ export default function EditProduct() {
                                   onChange={handleInputChange}
                                 >
                                   <option value="">Select Free Product</option>
-                                  {availableProducts.map(product => (
+                                  {availableProducts.map((product) => (
                                     <option key={product.id} value={product.id}>
-                                      {product.title} - ₹{product.amount}
+                                      {product.title} - ₹{product.sellingPrice || product.amount}
                                     </option>
                                   ))}
                                 </select>
@@ -811,9 +1032,11 @@ export default function EditProduct() {
                             )}
 
                             {/* Maximum application limit */}
-                            {formData.offerType !== 'none' && (
+                            {formData.offerType !== "none" && (
                               <div className="col-md-4">
-                                <label className="form-label fw-medium text-dark mb-1">Max Applications</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Max Applications
+                                </label>
                                 <input
                                   type="number"
                                   className="form-control"
@@ -823,14 +1046,19 @@ export default function EditProduct() {
                                   min="1"
                                   placeholder="e.g., 5 (0 = unlimited)"
                                 />
-                                <small className="text-muted">Maximum times this offer can be applied per order (0 = unlimited)</small>
+                                <small className="text-muted">
+                                  Maximum times this offer can be applied per
+                                  order (0 = unlimited)
+                                </small>
                               </div>
                             )}
 
                             {/* Offer Description */}
-                            {formData.offerType !== 'none' && (
+                            {formData.offerType !== "none" && (
                               <div className="col-12">
-                                <label className="form-label fw-medium text-dark mb-1">Offer Description</label>
+                                <label className="form-label fw-medium text-dark mb-1">
+                                  Offer Description
+                                </label>
                                 <input
                                   type="text"
                                   className="form-control"
@@ -844,57 +1072,89 @@ export default function EditProduct() {
                           </div>
 
                           {/* Dynamic offer preview */}
-                          {formData.offerType !== 'none' && (
+                          {formData.offerType !== "none" && (
                             <div className="mt-3 p-3 bg-light rounded">
-                              <h6 className="fw-semibold mb-2">Offer Preview:</h6>
+                              <h6 className="fw-semibold mb-2">
+                                Offer Preview:
+                              </h6>
                               <p className="mb-0 text-success fw-medium">
                                 {generateOfferText(formData)}
                               </p>
                               {formData.maxQuantity && (
                                 <small className="text-muted">
-                                  Maximum {formData.maxQuantity} application(s) per order
+                                  Maximum {formData.maxQuantity} application(s)
+                                  per order
                                 </small>
                               )}
                             </div>
                           )}
                         </td>
                       </tr>
-                      
+
                       {/* Product Details */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Product Details</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Product Details
+                          </label>
                         </td>
                         <td>
                           <div className="row">
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Size</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Size
+                              </label>
                               <select
                                 className="form-select"
                                 name="size"
                                 value={formData.size}
                                 onChange={handleInputChange}
                               >
-                                {sizes.map(size => (
-                                  <option key={size.value} value={size.value}>{size.label}</option>
+                                {sizes.map((size) => (
+                                  <option key={size.value} value={size.value}>
+                                    {size.label}
+                                  </option>
                                 ))}
                               </select>
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Unit</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Unit
+                              </label>
                               <select
                                 className="form-select"
                                 name="unit"
                                 value={formData.unit}
                                 onChange={handleInputChange}
                               >
-                                {units.map(unit => (
-                                  <option key={unit.value} value={unit.value}>{unit.label}</option>
+                                {units.map((unit) => (
+                                  <option key={unit.value} value={unit.value}>
+                                    {unit.label}
+                                  </option>
                                 ))}
                               </select>
+                              
+                              {/* Custom Unit Input - Show only when "any" is selected */}
+                              {formData.unit === 'any' && (
+                                <div className="mt-2">
+                                  <label className="form-label fw-medium text-dark mb-1">
+                                    Custom Unit Name
+                                  </label>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    name="customUnit"
+                                    value={formData.customUnit || ''}
+                                    onChange={handleInputChange}
+                                    placeholder="Enter custom unit (e.g., bowl, plate, box)"
+                                  />
+                                </div>
+                              )}
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Quantity</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Quantity
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -908,16 +1168,20 @@ export default function EditProduct() {
                           </div>
                         </td>
                       </tr>
-                      
+
                       {/* Priority & Status */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Priority & Status</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Priority & Status
+                          </label>
                         </td>
                         <td>
                           <div className="row">
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Priority</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Priority
+                              </label>
                               <input
                                 type="number"
                                 className="form-control"
@@ -928,36 +1192,52 @@ export default function EditProduct() {
                                 max="1000"
                                 placeholder="Enter priority (1-1000)"
                               />
-                              <small className="text-muted">Higher priority products appear first (1-1000)</small>
+                              <small className="text-muted">
+                                Higher priority products appear first (1-1000)
+                              </small>
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">Status</label>
+                              <label className="form-label fw-medium text-dark mb-1">
+                                Status
+                              </label>
                               <select
                                 className="form-select"
                                 name="status"
                                 value={formData.status}
                                 onChange={handleInputChange}
                               >
-                                {statusOptions.map(option => (
-                                  <option key={option.value} value={option.value}>
+                                {statusOptions.map((option) => (
+                                  <option
+                                    key={option.value}
+                                    value={option.value}
+                                  >
                                     {option.label}
                                   </option>
                                 ))}
                               </select>
-                              <small className="text-muted">Set product availability status</small>
+                              <small className="text-muted">
+                                Set product availability status
+                              </small>
                             </div>
                           </div>
                         </td>
                       </tr>
-                      
+
                       {/* Image Upload */}
                       <tr>
                         <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">Product Image</label>
+                          <label className="form-label fw-medium text-dark mb-0">
+                            Product Image
+                          </label>
                         </td>
                         <td>
-                          <div className="border-dashed border-2 rounded-3 p-4 text-center"
-                               style={{ borderColor: '#dee2e6', backgroundColor: '#f8f9fa' }}>
+                          <div
+                            className="border-dashed border-2 rounded-3 p-4 text-center"
+                            style={{
+                              borderColor: "#dee2e6",
+                              backgroundColor: "#f8f9fa",
+                            }}
+                          >
                             <input
                               type="file"
                               accept="image/*"
@@ -965,14 +1245,21 @@ export default function EditProduct() {
                               id="imageUpload"
                               onChange={handleImageChange}
                             />
-                            <label htmlFor="imageUpload" className="cursor-pointer d-block">
+                            <label
+                              htmlFor="imageUpload"
+                              className="cursor-pointer d-block"
+                            >
                               <div className="py-3">
                                 <Upload size={32} className="text-muted mb-2" />
-                                <h6 className="fw-semibold text-dark mb-1">Click to upload new product image</h6>
+                                <h6 className="fw-semibold text-dark mb-1">
+                                  Click to upload new product image
+                                </h6>
                                 <p className="text-muted mb-0 small">
-                                  PNG, JPG, WEBP up to 5MB
+                                  PNG, JPG, WEBP up to 10MB
                                 </p>
-                                <small className="text-info">Leave empty to keep current image</small>
+                                <small className="text-info">
+                                  Leave empty to keep current image
+                                </small>
                               </div>
                             </label>
                           </div>
@@ -983,10 +1270,15 @@ export default function EditProduct() {
                                 src={preview}
                                 alt="Preview"
                                 className="img-fluid rounded shadow-sm"
-                                style={{ maxHeight: '200px', objectFit: 'cover' }}
+                                style={{
+                                  maxHeight: "200px",
+                                  objectFit: "cover",
+                                }}
                               />
                               <div className="mt-1">
-                                <small className="text-muted">Current Image Preview</small>
+                                <small className="text-muted">
+                                  {image ? 'New Image Preview' : 'Current Image'}
+                                </small>
                               </div>
                             </div>
                           )}
@@ -1006,25 +1298,40 @@ export default function EditProduct() {
                   >
                     Reset Changes
                   </button>
-                  <button
-                    type="submit"
-                    className="btn btn-primary px-4 py-2 d-flex align-items-center gap-2"
-                    disabled={loading}
-                  >
-                    {loading ? (
-                      <>
-                        <div className="spinner-border spinner-border-sm" role="status">
-                          <span className="visually-hidden">Loading...</span>
-                        </div>
-                        Updating Product...
-                      </>
-                    ) : (
-                      <>
-                        <Save size={18} />
-                        Update Product
-                      </>
-                    )}
-                  </button>
+
+                  <div className="d-flex gap-3">
+                    <button
+                      type="button"
+                      className="btn btn-outline-primary px-4 py-2"
+                      onClick={() => router.push('/products')}
+                      disabled={loading}
+                    >
+                      Cancel
+                    </button>
+                    
+                    <button
+                      type="submit"
+                      className="btn btn-primary px-4 py-2 d-flex align-items-center gap-2"
+                      disabled={loading}
+                    >
+                      {loading ? (
+                        <>
+                          <div
+                            className="spinner-border spinner-border-sm"
+                            role="status"
+                          >
+                            <span className="visually-hidden">Loading...</span>
+                          </div>
+                          Updating Product...
+                        </>
+                      ) : (
+                        <>
+                          <Save size={18} />
+                          Update Product
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>

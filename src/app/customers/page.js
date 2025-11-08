@@ -28,8 +28,6 @@ import {
   Settings
 } from 'lucide-react';
 
-
-
 export default function CustomersPage() {
   const router = useRouter();
   const [customers, setCustomers] = useState([]);
@@ -37,6 +35,31 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
+
+  // ✅ Vendor/Admin Filter States
+  const [currentUser, setCurrentUser] = useState(null);
+  const [vendorFilter, setVendorFilter] = useState('all');
+  const [uniqueVendors, setUniqueVendors] = useState([]);
+
+  // Add below your existing useState hooks
+  const [selectedDate, setSelectedDate] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [categories, setCategories] = useState(['All', 'Food', 'Grocery', 'Drinks']);
+  const [orders, setOrders] = useState([]);
+
+  // Fetch current user on component mount
+  useEffect(() => {
+    // Simulate fetching current user from your auth system
+    const fetchCurrentUser = async () => {
+      // Replace this with your actual user fetching logic
+      const user = {
+        role: 'main_admin', // Change to 'vendor' or 'admin' to test different roles
+        name: 'Admin User'
+      };
+      setCurrentUser(user);
+    };
+    fetchCurrentUser();
+  }, []);
 
   useEffect(() => {
     const fetchCustomers = async () => {
@@ -62,6 +85,15 @@ export default function CustomersPage() {
           };
         });
 
+        setOrders(ordersData); // Store orders for vendor filtering
+
+        // Extract unique vendors from orders
+        const vendors = [...new Set(ordersData
+          .filter(order => order.vendorId || order.vendorName)
+          .map(order => order.vendorId || order.vendorName)
+        )];
+        setUniqueVendors(vendors);
+
         // Process orders to extract unique customers with their details
         const customerMap = new Map();
 
@@ -86,7 +118,9 @@ export default function CustomersPage() {
               city: order.city,
               state: order.state,
               pinCode: order.pinCode,
-              landmark: order.landmark
+              landmark: order.landmark,
+              vendorId: order.vendorId, // Store vendor info for filtering
+              vendorName: order.vendorName
             });
           }
 
@@ -116,14 +150,39 @@ export default function CustomersPage() {
     fetchCustomers();
   }, []);
 
+  // Apply filters when search term or vendor filter changes
   useEffect(() => {
-    const filtered = customers.filter(customer =>
-      customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      customer.phone.includes(searchTerm) ||
-      customer.email.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    let filtered = customers;
+
+    // Apply search filter
+    if (searchTerm) {
+      filtered = filtered.filter(customer =>
+        customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        customer.phone.includes(searchTerm) ||
+        customer.email.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    // Apply vendor filter (only if user is main admin and filter is set)
+    if (isMainAdmin && vendorFilter !== 'all') {
+      if (vendorFilter === 'admin_only') {
+        // Show only customers from admin orders (no vendor assigned)
+        filtered = filtered.filter(customer => 
+          !customer.vendorId || 
+          customer.vendorId === 'admin' || 
+          customer.vendorId.includes('admin')
+        );
+      } else {
+        // Show customers from specific vendor
+        filtered = filtered.filter(customer => 
+          customer.vendorId === vendorFilter || 
+          customer.vendorName === vendorFilter
+        );
+      }
+    }
+
     setFilteredCustomers(filtered);
-  }, [searchTerm, customers]);
+  }, [searchTerm, customers, vendorFilter]);
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('en-IN', {
@@ -149,9 +208,17 @@ export default function CustomersPage() {
   };
 
   const viewCustomerOrders = (customer) => {
-    // Navigate to orders page with customer filter
     router.push(`/orders?customer=${customer.phone}`);
   };
+
+  const getVendorDisplayName = (vendorId) => {
+    // Find the vendor name from orders
+    const vendorOrder = orders.find(order => order.vendorId === vendorId || order.vendorName === vendorId);
+    return vendorOrder?.vendorName || vendorOrder?.vendorId || vendorId || 'Unknown Vendor';
+  };
+
+  // Check if current user is main admin
+  const isMainAdmin = currentUser?.role === 'main_admin';
 
   if (loading) {
     return (
@@ -173,10 +240,8 @@ export default function CustomersPage() {
 
   return (
     <div className="d-flex" style={{ minHeight: '100vh' }}>
-
-
-    <div className="d-flex" style={{ minHeight: '100vh' }}>
-      <Sidebar />
+      <div className="d-flex" style={{ minHeight: '100vh' }}>
+        <Sidebar />
       </div>
       
       {/* Main Content */}
@@ -191,14 +256,50 @@ export default function CustomersPage() {
             <div className="text-end">
               <div className="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 px-3 py-2">
                 <Users size={16} className="me-1" />
-                {customers.length} Total Customers
+                {filteredCustomers.length} {vendorFilter !== 'all' ? 'Filtered' : 'Total'} Customers
               </div>
             </div>
           </div>
 
-          {/* Search and Stats */}
+          {/* Search and Filters */}
           <div className="row g-3">
-            <div className="col-md-6">
+            {/* Vendor Filter - Only for Main Admin */}
+            {isMainAdmin && (
+              <div className="col-md-4">
+                <label className="form-label fw-medium text-dark">
+                  Filter by Vendor 
+                  <span className="badge bg-warning ms-2">Admin Only</span>
+                </label>
+                <div className="input-group">
+                  <span className="input-group-text bg-light border-0">
+                    <Users size={18} />
+                  </span>
+                  <select
+                    className="form-select border-0 bg-light"
+                    value={vendorFilter}
+                    onChange={(e) => setVendorFilter(e.target.value)}
+                  >
+                    <option value="all">All Vendors ({customers.length})</option>
+                    <option value="admin_only">
+                      Admin Orders Only ({customers.filter(c => !c.vendorId || c.vendorId.includes('admin')).length})
+                    </option>
+                    {uniqueVendors.map(vendor => {
+                      const vendorCustomers = customers.filter(customer => 
+                        customer.vendorId === vendor || customer.vendorName === vendor
+                      );
+                      const vendorName = getVendorDisplayName(vendor);
+                      return (
+                        <option key={vendor} value={vendor}>
+                          {vendorName} ({vendorCustomers.length})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            <div className={isMainAdmin ? "col-md-4" : "col-md-6"}>
               <label className="form-label fw-medium text-dark">Search Customers</label>
               <div className="input-group">
                 <span className="input-group-text bg-light border-0">
@@ -213,11 +314,13 @@ export default function CustomersPage() {
                 />
               </div>
             </div>
-            <div className="col-md-6">
+
+            <div className={isMainAdmin ? "col-md-4" : "col-md-6"}>
               <label className="form-label fw-medium text-dark">Results</label>
               <div className="p-2 bg-light rounded border-0">
                 <small className="text-muted">
                   Showing {filteredCustomers.length} of {customers.length} customers
+                  {vendorFilter !== 'all' && ` • Filtered by vendor`}
                 </small>
               </div>
             </div>
@@ -231,7 +334,10 @@ export default function CustomersPage() {
               <Users size={64} className="text-muted mb-3 opacity-50" />
               <h5 className="fw-semibold text-dark">No customers found</h5>
               <p className="text-muted">
-                {searchTerm ? 'No customers match your search criteria' : 'No customer data available'}
+                {searchTerm || vendorFilter !== 'all' 
+                  ? 'No customers match your search criteria' 
+                  : 'No customer data available'
+                }
               </p>
             </div>
           ) : (
@@ -245,6 +351,9 @@ export default function CustomersPage() {
                         <thead className="table-light">
                           <tr>
                             <th className="ps-4 py-3 fw-semibold text-dark">Customer</th>
+                            {isMainAdmin && (
+                              <th className="py-3 fw-semibold text-dark">Vendor</th>
+                            )}
                             <th className="py-3 fw-semibold text-dark">Contact Info</th>
                             <th className="py-3 fw-semibold text-dark">Orders & Spending</th>
                             <th className="py-3 fw-semibold text-dark">Customer Tier</th>
@@ -269,6 +378,15 @@ export default function CustomersPage() {
                                     </div>
                                   </div>
                                 </td>
+
+                                {/* Vendor Info - Only for Main Admin */}
+                                {isMainAdmin && (
+                                  <td>
+                                    <span className="badge bg-info bg-opacity-10 text-info border border-info border-opacity-25">
+                                      {customer.vendorName || customer.vendorId || 'Admin'}
+                                    </span>
+                                  </td>
+                                )}
 
                                 {/* Contact Info */}
                                 <td>
@@ -385,6 +503,14 @@ export default function CustomersPage() {
                       <label className="fw-medium text-muted small">Customer Since</label>
                       <p className="fw-semibold">{formatDate(selectedCustomer.firstOrderDate)}</p>
                     </div>
+                    {isMainAdmin && (
+                      <div className="mb-2">
+                        <label className="fw-medium text-muted small">Associated Vendor</label>
+                        <p className="fw-semibold text-info">
+                          {selectedCustomer.vendorName || selectedCustomer.vendorId || 'Admin'}
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Address Information */}

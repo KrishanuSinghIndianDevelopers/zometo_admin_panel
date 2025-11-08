@@ -9,6 +9,8 @@ import {
   orderBy,
   query,
   Timestamp,
+  doc,
+  updateDoc
 } from 'firebase/firestore';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import {
@@ -35,7 +37,13 @@ import {
   ShoppingCart,
   Users,
   Settings,
-  Store
+  Store,
+  Truck,
+  CheckCircle,
+  Clock4,
+  Edit3,
+  CreditCard,
+  XCircle
 } from 'lucide-react';
 
 export default function OrdersPage() {
@@ -46,11 +54,14 @@ export default function OrdersPage() {
   const [selectedDate, setSelectedDate] = useState('');
   const [categoryCounts, setCategoryCounts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [updatingOrder, setUpdatingOrder] = useState(null);
   
   // ✅ NEW: Vendor/Admin Filter States
   const [currentUser, setCurrentUser] = useState(null);
   const [vendorFilter, setVendorFilter] = useState('all');
   const [uniqueVendors, setUniqueVendors] = useState([]);
+
+  const router = useRouter();
 
   useEffect(() => {
     checkAuthAndFetchOrders();
@@ -92,10 +103,22 @@ export default function OrdersPage() {
         } else {
           orderDate = new Date();
         }
+        
+        // ✅ FIX: Handle payment status properly
+        let paymentStatus = order.paymentStatus || 'unpaid';
+        // If Razorpay payment IDs exist, consider it paid
+        if (order.razorpayPaymentId || order.status === 'Paid') {
+          paymentStatus = 'paid';
+        }
+        
         return {
           id: doc.id,
           ...order,
           orderDate,
+          // Ensure status exists, default to 'confirmed' (since pending is removed)
+          status: order.status === 'Paid' ? 'confirmed' : (order.status || 'confirmed'),
+          // Ensure payment status is correctly set
+          paymentStatus: paymentStatus
         };
       });
 
@@ -185,9 +208,37 @@ export default function OrdersPage() {
     return `Vendor: ${vendorId.substring(0, 10)}...`;
   };
 
+  // ✅ NEW: Update order status in Firebase
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      setUpdatingOrder(orderId);
+      const orderRef = doc(db, 'orders', orderId);
+      
+      await updateDoc(orderRef, {
+        status: newStatus,
+        updatedAt: Timestamp.now()
+      });
+
+      // Update local state
+      setOrders(prevOrders => 
+        prevOrders.map(order => 
+          order.id === orderId 
+            ? { ...order, status: newStatus }
+            : order
+        )
+      );
+
+      console.log(`✅ Order ${orderId} status updated to: ${newStatus}`);
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      alert('Failed to update order status');
+    } finally {
+      setUpdatingOrder(null);
+    }
+  };
+
   const getStatusBadge = (status) => {
     const statusColors = {
-      'pending': 'warning',
       'confirmed': 'info',
       'preparing': 'primary',
       'out_for_delivery': 'secondary',
@@ -195,6 +246,135 @@ export default function OrdersPage() {
       'cancelled': 'danger'
     };
     return statusColors[status] || 'secondary';
+  };
+
+  // ✅ NEW: Get payment status badge
+  const getPaymentStatusBadge = (paymentStatus) => {
+    const paymentColors = {
+      'paid': 'success',
+      'unpaid': 'danger',
+      'pending': 'warning',
+      'failed': 'danger'
+    };
+    return paymentColors[paymentStatus] || 'secondary';
+  };
+
+  // ✅ UPDATED: Status tracking component - REMOVED payment status from here
+  const StatusTracker = ({ order }) => {
+    const statusSteps = [
+      { key: 'confirmed', label: 'Confirmed', icon: CheckCircle, clickable: false },
+      { key: 'preparing', label: 'Preparing', icon: Package, clickable: true },
+      { key: 'out_for_delivery', label: 'Out for Delivery', icon: Truck, clickable: true },
+      { key: 'delivered', label: 'Delivered', icon: CheckCircle, clickable: false }
+    ];
+
+    const currentStatusIndex = statusSteps.findIndex(step => step.key === order.status);
+
+    const handleStatusClick = async (newStatus) => {
+      if (updatingOrder === order.id) return; // Prevent multiple clicks
+      
+      // Only allow moving forward in status for clickable steps
+      const newStatusIndex = statusSteps.findIndex(step => step.key === newStatus);
+      if (newStatusIndex < currentStatusIndex) {
+        if (!confirm('Are you sure you want to move this order to a previous status?')) {
+          return;
+        }
+      }
+      
+      await updateOrderStatus(order.id, newStatus);
+    };
+
+    return (
+      <div className="status-tracker">
+        <div className="d-flex justify-content-between align-items-center position-relative">
+          {/* Connection lines */}
+          <div 
+            className="position-absolute bg-secondary opacity-25"
+            style={{
+              top: '50%',
+              left: '0',
+              right: '0',
+              height: '2px',
+              transform: 'translateY(-50%)',
+              zIndex: 1
+            }}
+          ></div>
+          
+          {statusSteps.map((step, index) => {
+            const IconComponent = step.icon;
+            const isCompleted = index <= currentStatusIndex;
+            const isCurrent = index === currentStatusIndex;
+            const isClickable = step.clickable && currentUser && 
+                              (currentUser.role === 'admin' || currentUser.role === 'main_admin' || currentUser.role === 'vendor');
+            
+            return (
+              <div key={step.key} className="d-flex flex-column align-items-center position-relative" style={{ zIndex: 2 }}>
+                {isClickable ? (
+                  <button
+                    className={`rounded-circle d-flex align-items-center justify-content-center border-0 ${
+                      isCompleted ? 'bg-primary text-white' : 'bg-light text-muted'
+                    } ${isCurrent ? 'border border-primary border-2' : ''}`}
+                    style={{
+                      width: '40px',
+                      height: '40px',
+                      transition: 'all 0.3s ease',
+                      cursor: isClickable ? 'pointer' : 'default'
+                    }}
+                    onClick={() => handleStatusClick(step.key)}
+                    disabled={updatingOrder === order.id || !isClickable}
+                    title={isClickable ? `Set status to ${step.label}` : 'Read only'}
+                  >
+                    {updatingOrder === order.id && isCurrent ? (
+                      <div className="spinner-border spinner-border-sm" role="status">
+                        <span className="visually-hidden">Loading...</span>
+                      </div>
+                    ) : (
+                      <IconComponent size={18} />
+                    )}
+                  </button>
+                ) : (
+                  <div
+                    className={`rounded-circle d-flex align-items-center justify-content-center ${
+                      isCompleted ? 'bg-success text-white' : 'bg-light text-muted'
+                    } ${isCurrent ? 'border border-success border-2' : ''}`}
+                    style={{
+                      width: '40px',
+                      height: '40px',
+                      transition: 'all 0.3s ease'
+                    }}
+                    title={`${step.label} (Auto from Mobile App)`}
+                  >
+                    <IconComponent size={18} />
+                  </div>
+                )}
+                <small 
+                  className={`mt-2 fw-medium text-center ${isCompleted ? 'text-primary' : 'text-muted'}`}
+                  style={{ fontSize: '0.75rem', minWidth: '80px' }}
+                >
+                  {step.label}
+                </small>
+              </div>
+            );
+          })}
+        </div>
+        
+        {/* ✅ REMOVED: Payment Status from here - it's already in Payment column */}
+        
+        {/* Quick Action Buttons - Only for clickable statuses */}
+        <div className="mt-3 text-center">
+          {currentStatusIndex < statusSteps.length - 1 && statusSteps[currentStatusIndex + 1]?.clickable && (
+            <button
+              className="btn btn-sm btn-outline-primary"
+              onClick={() => handleStatusClick(statusSteps[currentStatusIndex + 1].key)}
+              disabled={updatingOrder === order.id}
+            >
+              <Edit3 size={14} className="me-1" />
+              Move to {statusSteps[currentStatusIndex + 1].label}
+            </button>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const formatDate = (date) => {
@@ -243,7 +423,7 @@ export default function OrdersPage() {
 
           {/* Stats Cards */}
           <div className="row g-3 mb-4">
-            <div className="col-md-4">
+            <div className="col-md-3">
               <div className="card border-0 bg-primary bg-opacity-10">
                 <div className="card-body">
                   <div className="d-flex align-items-center">
@@ -256,7 +436,7 @@ export default function OrdersPage() {
                 </div>
               </div>
             </div>
-            <div className="col-md-4">
+            <div className="col-md-3">
               <div className="card border-0 bg-success bg-opacity-10">
                 <div className="card-body">
                   <div className="d-flex align-items-center">
@@ -269,7 +449,7 @@ export default function OrdersPage() {
                 </div>
               </div>
             </div>
-            <div className="col-md-4">
+            <div className="col-md-3">
               <div className="card border-0 bg-warning bg-opacity-10">
                 <div className="card-body">
                   <div className="d-flex align-items-center">
@@ -278,6 +458,21 @@ export default function OrdersPage() {
                       <small className="text-muted">Total Orders</small>
                     </div>
                     <ShoppingCart size={24} className="text-warning opacity-50" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="col-md-3">
+              <div className="card border-0 bg-info bg-opacity-10">
+                <div className="card-body">
+                  <div className="d-flex align-items-center">
+                    <div className="flex-grow-1">
+                      <h4 className="fw-bold text-info">
+                        {orders.filter(order => order.paymentStatus === 'paid').length}
+                      </h4>
+                      <small className="text-muted">Paid Orders</small>
+                    </div>
+                    <CreditCard size={24} className="text-info opacity-50" />
                   </div>
                 </div>
               </div>
@@ -397,7 +592,9 @@ export default function OrdersPage() {
                             {isAdminUser && <th className="py-3 fw-semibold text-dark">Vendor</th>}
                             <th className="py-3 fw-semibold text-dark">Order Details</th>
                             <th className="py-3 fw-semibold text-dark">Amount</th>
+                            <th className="py-3 fw-semibold text-dark">Payment</th>
                             <th className="py-3 fw-semibold text-dark">Status</th>
+                            <th className="py-3 fw-semibold text-dark">Order Progress</th>
                             <th className="py-3 fw-semibold text-dark">Date & Time</th>
                             <th className="pe-4 py-3 fw-semibold text-dark text-center">Actions</th>
                           </tr>
@@ -476,11 +673,33 @@ export default function OrdersPage() {
                                 </div>
                               </td>
 
+                              {/* ✅ FIXED: Payment Status - Now correctly shows PAID for Razorpay orders */}
+                              <td>
+                                <span className={`badge bg-${getPaymentStatusBadge(order.paymentStatus)}`}>
+                                  {order.paymentStatus === 'paid' ? (
+                                    <>
+                                      <CreditCard size={12} className="me-1" />
+                                      PAID
+                                    </>
+                                  ) : (
+                                    <>
+                                      <XCircle size={12} className="me-1" />
+                                      UNPAID
+                                    </>
+                                  )}
+                                </span>
+                              </td>
+
                               {/* Status */}
                               <td>
                                 <span className={`badge bg-${getStatusBadge(order.status)}`}>
                                   {order.status?.replace(/_/g, ' ').toUpperCase()}
                                 </span>
+                              </td>
+
+                              {/* ✅ FIXED: Order Progress Tracker - No payment status here */}
+                              <td style={{ minWidth: '300px' }}>
+                                <StatusTracker order={order} />
                               </td>
 
                               {/* Date & Time */}
@@ -644,17 +863,23 @@ export default function OrdersPage() {
                     <div className="card border-0 bg-primary bg-opacity-10">
                       <div className="card-body">
                         <div className="row text-center">
-                          <div className="col-md-4">
+                          <div className="col-md-3">
                             <div className="fw-semibold text-dark fs-5">₹{order.totalAmount}</div>
                             <small className="text-muted">Total Amount</small>
                           </div>
-                          <div className="col-md-4">
+                          <div className="col-md-3">
                             <div className="fw-semibold text-success fs-5">₹{order.totalDiscount}</div>
                             <small className="text-muted">Total Discount</small>
                           </div>
-                          <div className="col-md-4">
+                          <div className="col-md-3">
                             <div className="fw-semibold text-dark fs-5">{order.items?.length}</div>
                             <small className="text-muted">Total Items</small>
+                          </div>
+                          <div className="col-md-3">
+                            <div className={`fw-semibold fs-5 text-${getPaymentStatusBadge(order.paymentStatus)}`}>
+                              {order.paymentStatus?.toUpperCase()}
+                            </div>
+                            <small className="text-muted">Payment Status</small>
                           </div>
                         </div>
                       </div>

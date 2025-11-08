@@ -193,7 +193,7 @@ export async function getProducts(vendorUid = null, selectedVendorId = null) {
   }
 }
 
-// ✅ Create product with vendor UID - FIXED VERSION
+// ✅ Create product with vendor UID - UPDATED VERSION
 export async function createProduct(formData) {
   try {
     const {
@@ -205,11 +205,12 @@ export async function createProduct(formData) {
       subCategoryName,
       nestedSubCategoryId,
       nestedSubCategoryName,
-      amount,
+      sellingPrice, // ✅ UPDATED: amount → sellingPrice
       originalPrice,
       foodType,
       size,
       unit,
+      customUnit, // ✅ ADDED: Custom unit field
       quantity,
       priority,
       status,
@@ -238,14 +239,23 @@ export async function createProduct(formData) {
       return { success: false, error: 'Vendor authentication failed. Please log in again.' };
     }
 
+    // ✅ ADDED: Validate custom unit when "any" is selected
+    if (unit === 'any' && !customUnit) {
+      return { success: false, error: 'Please enter a custom unit name when "Any (custom)" is selected.' };
+    }
+
     // Upload image to Firebase Storage
     const storage = getStorage();
     const imageRef = ref(storage, `products/${Date.now()}-${imageFile.name}`);
     await uploadBytes(imageRef, imageFile);
     const imageUrl = await getDownloadURL(imageRef);
 
-    const sellingPrice = amount || originalPrice;
-    const discountedAmount = parseFloat(originalPrice) - parseFloat(sellingPrice);
+    // ✅ UPDATED: Use sellingPrice instead of amount
+    const finalSellingPrice = sellingPrice || originalPrice;
+    const discountedAmount = parseFloat(originalPrice) - parseFloat(finalSellingPrice);
+
+    // ✅ UPDATED: Handle custom unit
+    const finalUnit = unit === 'any' ? customUnit : unit;
 
     // Prepare product data
     const productData = {
@@ -257,12 +267,12 @@ export async function createProduct(formData) {
       subCategoryName: subCategoryName || '',
       nestedSubCategoryId: nestedSubCategoryId || '',
       nestedSubCategoryName: nestedSubCategoryName || '',
-      amount: parseFloat(sellingPrice),
+      sellingPrice: parseFloat(finalSellingPrice), // ✅ UPDATED: amount → sellingPrice
       originalPrice: parseFloat(originalPrice),
       discountedAmount: Math.max(0, discountedAmount),
       foodType: foodType || 'veg',
       size: size || '',
-      unit: unit || '',
+      unit: finalUnit || '', // ✅ UPDATED: Use custom unit if "any" is selected
       quantity: quantity ? parseFloat(quantity) : null,
       priority: parseInt(priority) || 0,
       status: status || 'available',

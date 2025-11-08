@@ -1,38 +1,72 @@
+// app/products/[id]/page.js
 'use client';
+import { useParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../../../firebase/firebase';
+import Sidebar from '../../../components/Sidebar';
 
-import { useParams, useRouter } from 'next/navigation';
+export default function ProductDetailPage() {
+  const { id } = useParams();
+  const [product, setProduct] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-export default function ViewProduct() {
-  const params = useParams();
-  const router = useRouter();
-  const { id } = params;
+  useEffect(() => {
+    if (id) {
+      fetchProduct();
+    }
+  }, [id]);
+
+  const fetchProduct = async () => {
+    try {
+      const docRef = doc(db, 'products', id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setProduct({ id: docSnap.id, ...docSnap.data() });
+      }
+    } catch (error) {
+      console.error('Error fetching product:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="d-flex min-vh-100">
+        <Sidebar />
+        <div className="flex-grow-1 d-flex justify-content-center align-items-center">
+          <div className="spinner-border text-primary" role="status">
+            <span className="visually-hidden">Loading...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!product) {
+    return (
+      <div className="d-flex min-vh-100">
+        <Sidebar />
+        <div className="flex-grow-1 d-flex justify-content-center align-items-center">
+          <div className="text-center">
+            <h3>Product Not Found</h3>
+            <p>The product you're looking for doesn't exist.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-vh-100 bg-light p-4">
-      <div className="d-flex align-items-center gap-3 mb-4">
-        <button 
-          onClick={() => router.back()}
-          className="btn btn-secondary"
-        >
-          Back
-        </button>
-        <h1 className="fw-bold text-dark mb-0">Product Details</h1>
-      </div>
-      
-      <div className="card shadow-sm">
-        <div className="card-body">
-          <h2 className="h4 mb-4">Product ID: {id}</h2>
-          <div className="row">
-            <div className="col-md-6">
-              <p><strong>Name:</strong> Sample Product</p>
-              <p><strong>Price:</strong> $99.99</p>
-            </div>
-            <div className="col-md-6">
-              <p><strong>Category:</strong> Electronics</p>
-              <p><strong>Status:</strong> Active</p>
-            </div>
+    <div className="d-flex min-vh-100">
+      <Sidebar />
+      <div className="flex-grow-1 p-4">
+        <div className="card shadow-sm">
+          <div className="card-body">
+            <h1 className="h3 fw-bold mb-4">{product.title}</h1>
+            {/* Product details display */}
           </div>
-          <p><strong>Description:</strong> This is a sample product description.</p>
         </div>
       </div>
     </div>

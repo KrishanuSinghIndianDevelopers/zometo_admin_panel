@@ -315,7 +315,7 @@ export default function CreateNotification() {
                         return (
                           <div key={audience.value} className="col-md-6">
                             <div 
-                              className={`card cursor-pointer border-2 ${isSelected ? 'border-primary bg-primary bg-opacity-5' : 'border-light'}`}
+                              className={`card cursor-pointer border-2 ${isSelected ? 'border-info bg-info  bg-opacity-10' : 'border-light'}`}
                               style={{ height: '120px', cursor: 'pointer' }}
                               onClick={() => handleInputChange('targetAudience', audience.value)}
                             >

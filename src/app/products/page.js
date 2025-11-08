@@ -28,7 +28,9 @@ import {
   Gift,
   Carrot,
   Beef,
-  Users
+  Users,
+  ToggleLeft,
+  ToggleRight
 } from 'lucide-react';
 
 export default function ProductsPage() {
@@ -61,12 +63,11 @@ export default function ProductsPage() {
     { value: 'non-veg', label: 'Non-Vegetarian', icon: Beef, color: 'text-danger' }
   ];
 
-  // Status options
+  // Status options - Updated to only Available/Not Available
   const statusOptions = [
     { value: 'All', label: 'All Status' },
     { value: 'available', label: 'Available', color: 'success' },
-    { value: 'upcoming', label: 'Upcoming', color: 'warning' },
-    { value: 'cancelled', label: 'Cancelled', color: 'danger' }
+    { value: 'not-available', label: 'Not Available', color: 'danger' }
   ];
 
   // Offer types configuration
@@ -275,7 +276,10 @@ const loadVendorData = async (vendorUid) => {
     }
   };
 
-  const handleStatusChange = async (productId, newStatus) => {
+  const handleStatusChange = async (productId, currentStatus) => {
+    // Toggle between 'available' and 'not-available'
+    const newStatus = currentStatus === 'available' ? 'not-available' : 'available';
+    
     try {
       const result = await updateProductStatus(productId, newStatus, vendorUid);
       if (result.success) {
@@ -283,7 +287,7 @@ const loadVendorData = async (vendorUid) => {
         setProducts(prev => prev.map(product => 
           product.id === productId ? { ...product, status: newStatus } : product
         ));
-        alert('Status updated successfully!');
+        alert(`Status updated to ${newStatus === 'available' ? 'Available' : 'Not Available'}!`);
       } else {
         alert(result.error);
       }
@@ -423,13 +427,17 @@ const loadVendorData = async (vendorUid) => {
     );
   };
 
-  // Get status badge with color
+  // Get status badge with color - Updated for Available/Not Available
   const getStatusBadge = (status) => {
-    const statusConfig = statusOptions.find(s => s.value === status) || statusOptions[0];
+    const isAvailable = status === 'available';
     
     return (
-      <span className={`badge bg-${statusConfig.color} bg-opacity-10 text-${statusConfig.color} border border-${statusConfig.color} border-opacity-25`}>
-        {statusConfig.label}
+      <span className={`badge ${
+        isAvailable 
+          ? 'bg-success bg-opacity-10 text-success border border-success border-opacity-25' 
+          : 'bg-danger bg-opacity-10 text-danger border border-danger border-opacity-25'
+      }`}>
+        {isAvailable ? 'Available' : 'Not Available'}
       </span>
     );
   };
@@ -835,16 +843,31 @@ const loadVendorData = async (vendorUid) => {
                                   )}
                                 </td>
 
-                                {/* Status */}
+                                {/* Status - Updated with Toggle Button */}
                                 <td>
                                   <div className="d-flex align-items-center gap-2">
                                     {getStatusBadge(product.status || 'available')}
                                     <button
-                                      className="btn btn-sm btn-outline-success"
-                                      onClick={() => handleStatusChange(product.id, product.status === 'available' ? 'upcoming' : 'available')}
-                                      title={product.status === 'available' ? 'Mark as Upcoming' : 'Mark as Available'}
+                                      className={`btn btn-sm p-1 ${
+                                        (product.status || 'available') === 'available' 
+                                          ? 'btn-success' 
+                                          : 'btn-outline-secondary'
+                                      }`}
+                                      onClick={() => handleStatusChange(
+                                        product.id, 
+                                        product.status || 'available'
+                                      )}
+                                      title={
+                                        (product.status || 'available') === 'available' 
+                                          ? 'Mark as Not Available' 
+                                          : 'Mark as Available'
+                                      }
                                     >
-                                      {product.status === 'available' ? '🟡' : '🟢'}
+                                      {(product.status || 'available') === 'available' ? (
+                                      <ToggleRight size={35} className="text-green-600" />
+                                      ) : (
+                                       <ToggleLeft size={35} className="text-red-600" />
+                                      )}
                                     </button>
                                   </div>
                                 </td>

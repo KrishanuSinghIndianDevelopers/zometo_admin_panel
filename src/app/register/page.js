@@ -27,74 +27,45 @@ export default function RegisterPage() {
   const [pageLoading, setPageLoading] = useState(true);
   const [gettingLocation, setGettingLocation] = useState(false);
 
-  // Get current location
   const getCurrentLocation = () => {
     setGettingLocation(true);
-    
     if (!navigator.geolocation) {
       alert('Geolocation is not supported by your browser');
       setGettingLocation(false);
       return;
     }
-
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        
         try {
-          // Get address from coordinates
           const response = await fetch(
             `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`
           );
           const data = await response.json();
-          
           setLocation({
             latitude: latitude.toString(),
             longitude: longitude.toString(),
             fullAddress: data.display_name || `${latitude}, ${longitude}`
           });
-          
-          // Auto-fill address field
-          setFormData(prev => ({
-            ...prev,
-            address: data.display_name || ''
-          }));
-          
+          setFormData(prev => ({ ...prev, address: data.display_name || '' }));
         } catch (error) {
-          console.error('Error getting address:', error);
           setLocation({
             latitude: latitude.toString(),
             longitude: longitude.toString(),
             fullAddress: `${latitude}, ${longitude}`
           });
         }
-        
         setGettingLocation(false);
       },
       (error) => {
-        console.error('Error getting location:', error);
-        let errorMessage = 'Unable to get your location';
-        
-        switch(error.code) {
-          case error.PERMISSION_DENIED:
-            errorMessage = 'Location access denied. Please enable location services.';
-            break;
-          case error.POSITION_UNAVAILABLE:
-            errorMessage = 'Location information unavailable.';
-            break;
-          case error.TIMEOUT:
-            errorMessage = 'Location request timed out.';
-            break;
-        }
-        
-        alert(errorMessage);
+        let msg = 'Unable to get your location';
+        if (error.code === error.PERMISSION_DENIED) msg = 'Location access denied. Please enable location.';
+        else if (error.code === error.POSITION_UNAVAILABLE) msg = 'Location unavailable.';
+        else if (error.code === error.TIMEOUT) msg = 'Location request timed out.';
+        alert(msg);
         setGettingLocation(false);
       },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 60000
-      }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
     );
   };
 
@@ -102,34 +73,23 @@ export default function RegisterPage() {
     const userData = localStorage.getItem('user');
     if (userData) {
       const parsedUser = JSON.parse(userData);
-      
       if (parsedUser.role === 'vendor') {
         alert('Vendors cannot access registration page.');
         router.push('/vendor-dashboard');
         return;
       }
-      
       if (parsedUser.role === 'main_admin') {
         setPageLoading(false);
         return;
       }
     }
-
     setPageLoading(false);
   }, [router]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-    if (errors[name]) {
-      setErrors(prev => ({
-        ...prev,
-        [name]: ''
-      }));
-    }
+    setFormData(prev => ({ ...prev, [name]: value }));
+    if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }));
   };
 
   const validateForm = () => {
@@ -152,20 +112,11 @@ export default function RegisterPage() {
     e.preventDefault();
     if (!validateForm()) return;
     setLoading(true);
-    
+
     try {
-      // Firebase mein data save karein with location
       const vendorData = {
-        name: formData.name,
-        restaurantName: formData.restaurantName,
-        email: formData.email,
-        phone: formData.phone,
-        address: formData.address,
-        location: {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          fullAddress: location.fullAddress
-        },
+        ...formData,
+        location: { ...location },
         password: formData.password,
         status: 'pending',
         approved: false,
@@ -173,333 +124,289 @@ export default function RegisterPage() {
         createdAt: serverTimestamp(),
         createdBy: 'main_admin'
       };
-
-      // Firebase Firestore mein add karein
-      const docRef = await addDoc(collection(db, 'vendors'), vendorData);
-      
-      console.log('Vendor registered with ID: ', docRef.id);
-      console.log('Location data saved:', location);
-      
-      // Success message show karein
+      await addDoc(collection(db, 'vendors'), vendorData);
       setRegistrationSuccess(true);
-      
-      // Form reset karein
       setFormData({
-        name: '',
-        restaurantName: '',
-        email: '',
-        phone: '',
-        address: '',
-        password: '',
-        confirmPassword: ''
+        name: '', restaurantName: '', email: '', phone: '',
+        address: '', password: '', confirmPassword: ''
       });
-      setLocation({
-        latitude: '',
-        longitude: '',
-        fullAddress: ''
-      });
-      
+      setLocation({ latitude: '', longitude: '', fullAddress: '' });
     } catch (error) {
-      console.error('Error adding vendor: ', error);
+      console.error('Error:', error);
       setErrors({ submit: 'Registration failed. Please try again.' });
     } finally {
       setLoading(false);
     }
   };
 
-  const goToLogin = () => {
-    router.push('/login');
-  };
+  const goToLogin = () => router.push('/login');
 
-  // Show loading while checking authentication
   if (pageLoading) {
     return (
-      <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light">
+      <div className="min-vh-100 d-flex align-items-center justify-content-center bg-gradient-orange">
         <div className="text-center">
-          <div className="spinner-border text-primary mb-3" role="status" style={{width: '3rem', height: '3rem'}}>
+          <div className="spinner-border text-warning mb-3" style={{ width: '3.5rem', height: '3.5rem' }}>
             <span className="visually-hidden">Loading...</span>
           </div>
-          <p className="text-muted">Loading...</p>
+          <p className="text-orange fw-semibold fs-5">Preparing your restaurant profile...</p>
         </div>
       </div>
     );
   }
 
-  // Success Message Component
   if (registrationSuccess) {
     return (
-      <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light py-5">
+      <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light py-5 px-3">
         <div className="container">
           <div className="row justify-content-center">
             <div className="col-lg-6">
-              <div className="card shadow border-0 text-center">
+              <div className="card shadow-lg border-0 overflow-hidden">
+                <div className="bg-success text-white text-center py-5 px-4">
+                  <div className="bg-white rounded-circle d-inline-flex align-items-center justify-content-center mb-4" style={{ width: '90px', height: '90px' }}>
+                    <i className="bi bi-check-lg text-success" style={{ fontSize: '3rem' }}></i>
+                  </div>
+                  <h2 className="fw-bold">Welcome to the Family!</h2>
+                </div>
+                <div className="card-body p-5 text-center">
+                  <div className="alert alert-warning border-0 bg-light-orange mb-4">
+                    <p className="mb-2 fw-bold text-orange">Your restaurant is under review</p>
+                    <p className="mb-0 small">We’ll verify your details and activate your account within 24 hours.</p>
+                  </div>
+                  {location.latitude && (
+                    <div className="alert alert-success border-0 mb-4">
+                      <p className="mb-1"><strong>Location Captured:</strong></p>
+                      <p className="mb-0 small text-success">{location.fullAddress}</p>
+                    </div>
+                  )}
+                  <button onClick={goToLogin} className="btn btn-success btn-lg px-5 py-3 rounded-pill shadow-sm">
+                    Go to Login
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {/* Custom CSS */}
+      <style jsx>{`
+        .bg-gradient-orange {
+          background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+        }
+        .bg-light-orange { background-color: #fff8e1 !important; }
+        .text-orange { color: #f97316 !important; }
+        .btn-warning { background: #fb923c; border: none; }
+        .btn-warning:hover { background: #f97316; }
+        .card-hover:hover { transform: translateY(-5px); transition: 0.3s; }
+        .form-control:focus {
+          border-color: #f97316;
+          box-shadow: 0 0 0 0.2rem rgba(249, 115, 22, 0.25);
+        }
+      `}</style>
+
+      <div className="min-vh-100 bg-gradient-orange py-5 px-3">
+        <div className="container">
+          {/* Hero */}
+          <div className="text-center mb-5">
+            <div className="d-inline-flex align-items-center bg-white px-4 py-2 rounded-pill shadow mb-3">
+              <div className="bg-warning rounded-circle d-flex align-items-center justify-content-center me-2" style={{ width: '40px', height: '40px' }}>
+                <i className="bi bi-shop-window text-white"></i>
+              </div>
+              <span className="fw-bold text-orange">Restaurant Partner Portal</span>
+            </div>
+            <h1 className="display-5 fw-bold text-dark mb-3">
+              Grow Your <span className="text-warning">Restaurant Business</span>
+            </h1>
+            {/* <p className="lead text-muted">Join 10,000+ restaurants getting more orders daily!</p> */}
+          </div>
+
+          <div className="row g-4">
+            {/* Benefits */}
+            <div className="col-lg-4">
+              <div className="card border-0 shadow card-hover h-100">
+                <div className="card-body p-4">
+                  <h5 className="card-title text-warning fw-bold mb-3">
+                    <i className="bi bi-graph-up-arrow me-2"></i> Why Partner With Us?
+                  </h5>
+                  <ul className="list-unstyled">
+                    <li className="mb-2"><i className="bi bi-check-circle-fill text-success me-2"></i> <strong>10,000+</strong> daily customers</li>
+                    <li className="mb-2"><i className="bi bi-check-circle-fill text-success me-2"></i> <strong>Zero</strong> commission first month</li>
+                    <li className="mb-2"><i className="bi bi-check-circle-fill text-success me-2"></i> Real-time order dashboard</li>
+                    <li className="mb-2"><i className="bi bi-check-circle-fill text-success me-2"></i> Free marketing & promotions</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="alert alert-success border-0 mt-3 text-center">
+                <i className="bi bi-shield-check me-2"></i>
+                <strong>100% Secure & Verified</strong>
+              </div>
+            </div>
+
+            {/* Form */}
+            <div className="col-lg-8">
+              <div className="card shadow-lg border-0">
                 <div className="card-body p-5">
-                  {/* Success Icon */}
-                  <div className="mb-4">
-                    <div
-                      className="bg-success rounded-circle d-inline-flex align-items-center justify-content-center"
-                      style={{ width: '80px', height: '80px' }}
-                    >
-                      <i className="bi bi-check-lg text-white" style={{ fontSize: '2.5rem' }}></i>
+                  <div className="d-flex justify-content-between align-items-center mb-4">
+                    <h3 className="fw-bold text-dark">Register Your Restaurant</h3>
+                    <div className="d-flex gap-1">
+                      <div className="bg-warning rounded-pill" style={{ width: '30px', height: '8px' }}></div>
+                      <div className="bg-secondary rounded-pill" style={{ width: '20px', height: '8px' }}></div>
+                      <div className="bg-secondary rounded-pill" style={{ width: '15px', height: '8px' }}></div>
                     </div>
                   </div>
 
-                  {/* Success Message */}
-                  <h2 className="h3 fw-bold text-success mb-3">
-                    Registration Submitted Successfully!
-                  </h2>
-
-                  <div className="alert alert-info border-0 bg-light-info">
-                    <p className="mb-3 fw-semibold">Thank you for connecting with us!</p>
-                    <p className="mb-0">
-                      Our team will contact you shortly to complete your onboarding process.
-                    </p>
+                  <div className="alert alert-warning border-0 mb-4">
+                    <i className="bi bi-info-circle-fill me-2"></i>
+                    <strong>Admin Approval Required:</strong> Your account will be activated after verification (within 24 hrs).
                   </div>
 
-                  {/* Location Info */}
+                  <div className="alert alert-info border-0 mb-4 d-flex justify-content-between align-items-center">
+                    <div>
+                      <i className="bi bi-geo-alt-fill me-2"></i>
+                      <strong>Enable Location:</strong> Help customers find your restaurant!
+                    </div>
+                    <button
+                      type="button"
+                      onClick={getCurrentLocation}
+                      disabled={gettingLocation}
+                      className="btn btn-sm btn-outline-primary d-flex align-items-center gap-2"
+                    >
+                      {gettingLocation ? (
+                        <>
+                          <span className="spinner-border spinner-border-sm"></span> Getting...
+                        </>
+                      ) : (
+                        <>
+                          <i className="bi bi-crosshair"></i> Get Location
+                        </>
+                      )}
+                    </button>
+                  </div>
+
                   {location.latitude && (
-                    <div className="alert alert-success border-0">
-                      <p className="mb-1"><strong>📍 Location Captured:</strong></p>
+                    <div className="alert alert-success border-0 mb-4">
+                      <p className="mb-1"><strong>Location Captured Successfully!</strong></p>
                       <p className="mb-0 small">{location.fullAddress}</p>
                     </div>
                   )}
 
-                  <div>
-                    <button
-                      onClick={goToLogin}
-                      className="btn btn-success btn-lg px-4 py-2 rounded-pill shadow-sm mt-3"
-                    >
-                      Go to Login
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Registration Form Component
-  return (
-    <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light py-5">
-      <div className="container">
-        <div className="row justify-content-center">
-          <div className="col-lg-8">
-            <div className="card shadow border-0">
-              <div className="card-body p-5">
-                {/* Header */}
-                <div className="text-center mb-4">
-                  <h1 className="h2 fw-bold text-primary">Create Vendor Account</h1>
-                  <p className="text-muted">Join our platform and grow your business</p>
-                </div>
-
-                {/* Admin Approval Notice */}
-                <div className="alert alert-warning border-0 mb-4">
-                  <i className="bi bi-info-circle me-2"></i>
-                  <strong>Note:</strong> Your account requires admin approval before you can login. 
-                  You'll receive confirmation email once approved.
-                </div>
-
-                {/* Location Notice */}
-                <div className="alert alert-info border-0 mb-4">
-                  <i className="bi bi-geo-alt me-2"></i>
-                  <strong>Location Access:</strong> We need your location to show your restaurant to nearby customers.
-                  <button
-                    type="button"
-                    onClick={getCurrentLocation}
-                    disabled={gettingLocation}
-                    className="btn btn-sm btn-outline-primary ms-2"
-                  >
-                    {gettingLocation ? (
-                      <>
-                        <span className="spinner-border spinner-border-sm me-1"></span>
-                        Getting Location...
-                      </>
-                    ) : (
-                      <>
-                        <i className="bi bi-crosshair2 me-1"></i>
-                        Get My Location
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                {location.latitude && (
-                  <div className="alert alert-success border-0 mb-4">
-                    <p className="mb-1"><strong>✅ Location Captured Successfully!</strong></p>
-                    <p className="mb-0 small">{location.fullAddress}</p>
-                  </div>
-                )}
-
-                <form onSubmit={handleSubmit}>
-                  <div className="row">
-                    {/* Personal Information */}
-                    <div className="col-md-6">
-                      <div className="mb-3">
-                        <label htmlFor="name" className="form-label">Full Name *</label>
+                  <form onSubmit={handleSubmit}>
+                    <div className="row g-3">
+                      <div className="col-md-6">
+                        <label className="form-label fw-semibold">Owner Name *</label>
                         <input
-                          id="name"
-                          name="name"
-                          type="text"
-                          value={formData.name}
-                          onChange={handleChange}
+                          name="name" value={formData.name} onChange={handleChange}
                           className={`form-control ${errors.name ? 'is-invalid' : ''}`}
-                          placeholder="Enter your full name"
+                          placeholder="John Doe"
                         />
                         {errors.name && <div className="invalid-feedback">{errors.name}</div>}
                       </div>
-                    </div>
-
-                    {/* Restaurant Information */}
-                    <div className="col-md-6">
-                      <div className="mb-3">
-                        <label htmlFor="restaurantName" className="form-label">Restaurant Name *</label>
+                      <div className="col-md-6">
+                        <label className="form-label fw-semibold">Restaurant Name *</label>
                         <input
-                          id="restaurantName"
-                          name="restaurantName"
-                          type="text"
-                          value={formData.restaurantName}
-                          onChange={handleChange}
+                          name="restaurantName" value={formData.restaurantName} onChange={handleChange}
                           className={`form-control ${errors.restaurantName ? 'is-invalid' : ''}`}
-                          placeholder="Enter restaurant name"
+                          placeholder="Spice Garden Dhaba"
                         />
                         {errors.restaurantName && <div className="invalid-feedback">{errors.restaurantName}</div>}
                       </div>
-                    </div>
-                  </div>
-
-                  <div className="row">
-                    {/* Contact Information */}
-                    <div className="col-md-6">
-                      <div className="mb-3">
-                        <label htmlFor="email" className="form-label">Email Address *</label>
+                      <div className="col-md-6">
+                        <label className="form-label fw-semibold">Email *</label>
                         <input
-                          id="email"
-                          name="email"
-                          type="email"
-                          value={formData.email}
-                          onChange={handleChange}
+                          type="email" name="email" value={formData.email} onChange={handleChange}
                           className={`form-control ${errors.email ? 'is-invalid' : ''}`}
-                          placeholder="Enter your email"
+                          placeholder="restaurant@example.com"
                         />
                         {errors.email && <div className="invalid-feedback">{errors.email}</div>}
                       </div>
-                    </div>
-
-                    <div className="col-md-6">
-                      <div className="mb-3">
-                        <label htmlFor="phone" className="form-label">Phone Number *</label>
+                      <div className="col-md-6">
+                        <label className="form-label fw-semibold">Phone *</label>
                         <input
-                          id="phone"
-                          name="phone"
-                          type="tel"
-                          value={formData.phone}
-                          onChange={handleChange}
+                          type="tel" name="phone" value={formData.phone} onChange={handleChange}
                           className={`form-control ${errors.phone ? 'is-invalid' : ''}`}
-                          placeholder="Enter phone number"
+                          placeholder="+91 98765 43210"
                         />
                         {errors.phone && <div className="invalid-feedback">{errors.phone}</div>}
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Address with Location */}
-                  <div className="mb-3">
-                    <label htmlFor="address" className="form-label">
-                      Business Address * 
-                      {location.latitude && (
-                        <span className="text-success ms-2">
-                          <i className="bi bi-check-circle-fill"></i> Location auto-filled
-                        </span>
-                      )}
-                    </label>
-                    <textarea
-                      id="address"
-                      name="address"
-                      rows="3"
-                      value={formData.address}
-                      onChange={handleChange}
-                      className={`form-control ${errors.address ? 'is-invalid' : ''}`}
-                      placeholder="Enter your business address or use 'Get My Location' button above"
-                    />
-                    {errors.address && <div className="invalid-feedback">{errors.address}</div>}
-                  </div>
-
-                  <div className="row">
-                    {/* Passwords */}
-                    <div className="col-md-6">
-                      <div className="mb-3">
-                        <label htmlFor="password" className="form-label">Password *</label>
+                      <div className="col-12">
+                        <label className="form-label fw-semibold">
+                          Business Address * 
+                          {location.latitude && <span className="text-success ms-2"><i className="bi bi-check-circle-fill"></i> Auto-filled</span>}
+                        </label>
+                        <textarea
+                          name="address" rows="3" value={formData.address} onChange={handleChange}
+                          className={`form-control ${errors.address ? 'is-invalid' : ''}`}
+                          placeholder="Full address of your restaurant, hotel, or dhaba"
+                        />
+                        {errors.address && <div className="invalid-feedback">{errors.address}</div>}
+                      </div>
+                      <div className="col-md-6">
+                        <label className="form-label fw-semibold">Password *</label>
                         <input
-                          id="password"
-                          name="password"
-                          type="password"
-                          value={formData.password}
-                          onChange={handleChange}
+                          type="password" name="password" value={formData.password} onChange={handleChange}
                           className={`form-control ${errors.password ? 'is-invalid' : ''}`}
-                          placeholder="Create password"
+                          placeholder="••••••••"
                         />
                         {errors.password && <div className="invalid-feedback">{errors.password}</div>}
                       </div>
-                    </div>
-
-                    <div className="col-md-6">
-                      <div className="mb-3">
-                        <label htmlFor="confirmPassword" className="form-label">Confirm Password *</label>
+                      <div className="col-md-6">
+                        <label className="form-label fw-semibold">Confirm Password *</label>
                         <input
-                          id="confirmPassword"
-                          name="confirmPassword"
-                          type="password"
-                          value={formData.confirmPassword}
-                          onChange={handleChange}
+                          type="password" name="confirmPassword" value={formData.confirmPassword} onChange={handleChange}
                           className={`form-control ${errors.confirmPassword ? 'is-invalid' : ''}`}
-                          placeholder="Confirm password"
+                          placeholder="••••••••"
                         />
                         {errors.confirmPassword && <div className="invalid-feedback">{errors.confirmPassword}</div>}
                       </div>
                     </div>
-                  </div>
 
-                  {/* Submit Error */}
-                  {errors.submit && (
-                    <div className="alert alert-danger">
-                      {errors.submit}
-                    </div>
-                  )}
+                    {errors.submit && <div className="alert alert-danger mt-3">{errors.submit}</div>}
 
-                  {/* Submit Button */}
-                  <button
-                    type="submit"
-                    disabled={loading || gettingLocation}
-                    className="btn btn-primary w-100 py-2 mb-3"
-                  >
-                    {loading ? (
-                      <>
-                        <span className="spinner-border spinner-border-sm me-2" />
-                        Creating Account...
-                      </>
-                    ) : (
-                      'Submit for Approval'
-                    )}
-                  </button>
+                    <button
+                      type="submit"
+                      disabled={loading || gettingLocation}
+                      className="btn btn-warning btn-lg w-100 mt-4 py-3 rounded-pill fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2"
+                    >
+                      {loading ? (
+                        <>
+                          <span className="spinner-border spinner-border-sm"></span>
+                          Submitting...
+                        </>
+                      ) : (
+                        <>
+                          Submit for Approval <i className="bi bi-arrow-right"></i>
+                        </>
+                      )}
+                    </button>
 
-                  {/* Login Link */}
-                  <div className="text-center">
-                    <p className="text-muted">
+                    <p className="text-center mt-4 text-muted">
                       Already have an account?{' '}
-                      <Link href="/login" className="text-decoration-none">
-                        Sign in here
+                      <Link href="/login" className="text-warning fw-bold text-decoration-none">
+                        Sign in
                       </Link>
                     </p>
-                  </div>
-                </form>
+                  </form>
+                </div>
               </div>
+            </div>
+          </div>
+
+          {/* Trust Footer */}
+          <div className="text-center mt-5 text-muted small">
+            <p>Trusted by <strong className="text-warning">10,000+ restaurants</strong> across India</p>
+            <div className="d-flex justify-content-center gap-4 mt-2">
+              <span><i className="bi bi-lock-fill"></i> SSL Secured</span>
+              <span><i className="bi bi-patch-check-fill"></i> Verified Partners</span>
+              <span><i className="bi bi-headset"></i> 24/7 Support</span>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

@@ -5,33 +5,22 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { ADMIN_CONFIG } from '../../config/admin';
 import { auth, db } from '../../firebase/firebase';
 import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs, updateDoc  } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
 
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const message = searchParams.get('message');
-  
-  const [formData, setFormData] = useState({
-    email: '',
-    password: ''
-  });
+
+  const [formData, setFormData] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const [showForgotPassword, setShowForgotPassword] = useState(false);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-    if (errors[name]) {
-      setErrors(prev => ({
-        ...prev,
-        [name]: ''
-      }));
-    }
+    setFormData(prev => ({ ...prev, [name]: value }));
+    if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }));
   };
 
   const validateForm = () => {
@@ -50,107 +39,62 @@ export default function LoginPage() {
     setErrors({});
 
     try {
-      console.log('🔄 Attempting login for:', formData.email);
+      console.log('Attempting login for:', formData.email);
 
-      // ✅ STEP 1: Check if it's the main admin using config
       if (formData.email === ADMIN_CONFIG.EMAIL && formData.password === ADMIN_CONFIG.PASSWORD) {
-        console.log('✅ Main admin login detected');
-        
         const adminData = {
-          uid: 'admin-main', // Special ID for main admin
+          uid: 'admin-main',
           email: ADMIN_CONFIG.EMAIL,
           name: ADMIN_CONFIG.NAME,
           role: 'main_admin',
           approved: true
         };
-
         localStorage.setItem('isLoggedIn', 'true');
         localStorage.setItem('user', JSON.stringify(adminData));
-        console.log('✅ Main admin login successful');
         router.push('/');
         return;
       }
 
-      // ✅ STEP 2: Try Firebase Auth login
       const userCredential = await signInWithEmailAndPassword(auth, formData.email, formData.password);
       const user = userCredential.user;
-      console.log('✅ Firebase Auth login successful, UID:', user.uid);
 
-// ✅ STEP 3: Check if user is admin in Firestore (BY EMAIL - Not by UID)
-console.log('🔄 Checking admin privileges...');
+      const adminsSnapshot = await getDocs(collection(db, 'admins'));
+      const allAdmins = adminsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const adminData = allAdmins.find(admin => admin.email === formData.email);
 
-// Get ALL admins from Firestore and find by email
-const adminsSnapshot = await getDocs(collection(db, 'admins'));
-const allAdmins = adminsSnapshot.docs.map(doc => ({
-  id: doc.id,
-  ...doc.data()
-}));
+      if (adminData) {
+        if (adminData.uid !== user.uid) {
+          await updateDoc(doc(db, 'admins', adminData.id), { uid: user.uid, lastLogin: new Date().toISOString() });
+        }
+        const userSessionData = {
+          uid: user.uid,
+          documentId: adminData.id,
+          email: adminData.email,
+          name: adminData.name,
+          role: adminData.role,
+          approved: adminData.approved
+        };
+        localStorage.setItem('isLoggedIn', 'true');
+        localStorage.setItem('user', JSON.stringify(userSessionData));
+        router.push('/');
+        return;
+      }
 
-console.log('📋 All admins in database:', allAdmins);
-
-// Find admin by EMAIL (not by UID)
-const adminData = allAdmins.find(admin => admin.email === formData.email);
-
-if (adminData) {
-  console.log('✅ Admin found in Firestore by email:', adminData);
-  
-  // ✅ Check if UID matches, if not update Firestore record
-  if (adminData.uid !== user.uid) {
-    console.log('🔄 UID mismatch, updating Firestore admin record...');
-    try {
-      await updateDoc(doc(db, 'admins', adminData.id), {
-        uid: user.uid,
-        lastLogin: new Date().toISOString()
-      });
-      console.log('✅ Firestore admin UID updated');
-    } catch (updateError) {
-      console.log('⚠️ Could not update admin UID:', updateError);
-    }
-  }
-  
-  // ✅ Successful admin login
-  const userSessionData = {
-    uid: user.uid,
-    documentId: adminData.id,
-    email: adminData.email,
-    name: adminData.name,
-    role: adminData.role,
-    approved: adminData.approved
-  };
-
-  localStorage.setItem('isLoggedIn', 'true');
-  localStorage.setItem('user', JSON.stringify(userSessionData));
-  
-  console.log('✅ Admin login successful');
-  router.push('/');
-  return;
-}
-      // ✅ STEP 4: Check if user is vendor
       let vendorDoc = null;
       let vendorData = null;
-
-      // Method 1: Find vendor by UID
       const uidQuery = query(collection(db, 'vendors'), where('uid', '==', user.uid));
       const uidSnapshot = await getDocs(uidQuery);
-      
+
       if (!uidSnapshot.empty) {
         vendorDoc = uidSnapshot.docs[0];
         vendorData = vendorDoc.data();
-        console.log('✅ Vendor found by UID:', vendorData);
       } else {
-        // Method 2: Find vendor by email
         const emailQuery = query(collection(db, 'vendors'), where('email', '==', formData.email));
         const emailSnapshot = await getDocs(emailQuery);
-        
         if (!emailSnapshot.empty) {
           vendorDoc = emailSnapshot.docs[0];
           vendorData = vendorDoc.data();
-          console.log('✅ Vendor found by email:', vendorData);
-          
-          // Update old vendor with UID
-          await updateDoc(doc(db, 'vendors', vendorDoc.id), {
-            uid: user.uid
-          });
+          await updateDoc(doc(db, 'vendors', vendorDoc.id), { uid: user.uid });
         }
       }
 
@@ -160,11 +104,9 @@ if (adminData) {
           setLoading(false);
           return;
         }
-
-        // ✅ Successful vendor login
         const userData = {
           uid: user.uid,
-          documentId: vendorDoc.id, 
+          documentId: vendorDoc.id,
           email: vendorData.email,
           name: vendorData.name,
           restaurantName: vendorData.restaurantName || '',
@@ -173,19 +115,12 @@ if (adminData) {
           role: 'vendor',
           approved: true
         };
-
         localStorage.setItem('isLoggedIn', 'true');
         localStorage.setItem('user', JSON.stringify(userData));
-        
-        console.log('✅ Vendor login successful');
         router.push('/');
         return;
       }
 
-      // ✅ STEP 5: If no vendor found, check if it's a Firebase Auth admin without Firestore record
-      console.log('⚠️ No vendor found, checking for admin privileges...');
-      
-      // Create a temporary admin session for Firebase Auth admins
       const tempAdminData = {
         uid: user.uid,
         email: user.email,
@@ -193,225 +128,226 @@ if (adminData) {
         role: 'admin',
         approved: true
       };
-
       localStorage.setItem('isLoggedIn', 'true');
       localStorage.setItem('user', JSON.stringify(tempAdminData));
-      
-      console.log('✅ Firebase Auth admin login successful');
       router.push('/');
 
     } catch (error) {
-      console.error('❌ Login error:', error);
-      
-      if (error.code === 'auth/invalid-credential') {
-        setErrors({ 
-          submit: 'Invalid email or password. Please check your credentials.' 
-        });
+      console.error('Login error:', error);
+      if (['auth/invalid-credential', 'auth/wrong-password'].includes(error.code)) {
+        setErrors({ submit: 'Invalid email or password. Please try again.' });
         setShowForgotPassword(true);
-      } 
-      else if (error.code === 'auth/user-not-found') {
-        setErrors({ submit: 'No account found with this email. Please register or contact admin.' });
-      }
-      else if (error.code === 'auth/wrong-password') {
-        setErrors({ submit: 'Incorrect password. Please try again or reset your password.' });
+      } else if (error.code === 'auth/user-not-found') {
+        setErrors({ submit: 'No account found. Register or contact admin.' });
+      } else if (error.code === 'auth/too-many-requests') {
+        setErrors({ submit: 'Too many attempts. Try again later or reset password.' });
         setShowForgotPassword(true);
+      } else {
+        setErrors({ submit: 'Login failed. Please try again.' });
       }
-      else if (error.code === 'auth/too-many-requests') {
-        setErrors({ submit: 'Too many failed attempts. Please try again later or reset your password.' });
-        setShowForgotPassword(true);
-      }
-      else {
-        setErrors({ submit: 'Login failed. Please try again or contact support.' });
-      }
-      
       setLoading(false);
     }
   };
 
   const handleForgotPassword = async () => {
     if (!formData.email) {
-      setErrors({ submit: 'Please enter your email address to reset password.' });
+      setErrors({ submit: 'Please enter your email to reset password.' });
       return;
     }
-
     try {
       setLoading(true);
       await sendPasswordResetEmail(auth, formData.email);
-      alert(`Password reset email sent to ${formData.email}. Please check your inbox.`);
+      alert(`Password reset email sent to ${formData.email}`);
       setShowForgotPassword(false);
     } catch (error) {
-      console.error('Password reset error:', error);
-      if (error.code === 'auth/user-not-found') {
-        setErrors({ submit: 'No account found with this email.' });
-      } else {
-        setErrors({ submit: 'Failed to send reset email. Please try again.' });
-      }
+      setErrors({ submit: error.code === 'auth/user-not-found' ? 'No account found.' : 'Failed to send reset email.' });
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light">
-      <div className="container">
-        <div className="row justify-content-center">
-          
-          <div className="col-md-6 col-lg-5">
-            {/* Success Message from registration */}
-            {message && (
-              <div className="alert alert-success text-center mb-4">
-                {message}
-              </div>
-            )}
+    <>
+      {/* Custom CSS */}
+      <style jsx>{`
+        .bg-gradient-orange {
+          background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+        }
+        .text-orange { color: #f97316 !important; }
+        .btn-warning {
+          background: #fb923c;
+          border: none;
+          font-weight: 600;
+        }
+        .btn-warning:hover { background: #f97316; }
+        .form-control:focus {
+          border-color: #f97316;
+          box-shadow: 0 0 0 0.2rem rgba(249, 115, 22, 0.25);
+        }
+        .card-hover:hover {
+          transform: translateY(-5px);
+          transition: 0.3s;
+        }
+      `}</style>
 
-            <div className="card shadow border-0">
-              <div className="card-body p-5">
-                {/* Header */}
-                <div className="text-center mb-4">
-                  <h1 className="h3 fw-bold text-primary">Welcome Back</h1>
-                  <p className="text-muted">Sign in to your account</p>
-                </div>
+      <div className="min-vh-100 bg-gradient-orange d-flex align-items-center py-5 px-3">
+        <div className="container">
+          <div className="row justify-content-center">
+            <div className="col-lg-10">
+              <div className="row g-4">
 
-                  <div className="alert alert-info">
-    <small>
-      <strong>Vendor Login:</strong> Use the same email and password you used during registration.
-    </small>
-  </div>
-
-                <form onSubmit={handleSubmit}>
-                  {/* Email */}
-                  <div className="mb-3">
-                    <label htmlFor="email" className="form-label">Email Address *</label>
-                    <input
-                      id="email"
-                      name="email"
-                      type="email"
-                      value={formData.email}
-                      onChange={handleChange}
-                      className={`form-control ${errors.email ? 'is-invalid' : ''}`}
-                      placeholder="Enter your email"
-                      autoComplete="email"
-                      required
-                    />
-                    {errors.email && <div className="invalid-feedback">{errors.email}</div>}
-                  </div>
-
-                  {/* Password */}
-                  <div className="mb-3">
-                    <label htmlFor="password" className="form-label">Password *</label>
-                    <input
-                      id="password"
-                      name="password"
-                      type="password"
-                      value={formData.password}
-                      onChange={handleChange}
-                      className={`form-control ${errors.password ? 'is-invalid' : ''}`}
-                      placeholder="Enter your password"
-                      autoComplete="current-password"
-                      required
-                    />
-                    {errors.password && <div className="invalid-feedback">{errors.password}</div>}
-                  </div>
-
-                  {/* Remember Me & Forgot Password */}
-                  <div className="d-flex justify-content-between align-items-center mb-4">
-                    <div className="form-check">
-                      <input
-                        id="remember"
-                        name="remember"
-                        type="checkbox"
-                        className="form-check-input"
-                      />
-                      <label htmlFor="remember" className="form-check-label">
-                        Remember me
-                      </label>
+                {/* Left: Welcome & Benefits */}
+                <div className="col-lg-5 d-flex align-items-center">
+                  <div>
+                    <div className="text-center text-lg-start mb-4">
+                      <div className="d-inline-flex align-items-center bg-white px-4 py-2 rounded-pill shadow mb-3">
+                        <div className="bg-warning rounded-circle d-flex align-items-center justify-content-center me-2" style={{ width: '40px', height: '40px' }}>
+                          <i className="bi bi-shop-window text-white"></i>
+                        </div>
+                        <span className="fw-bold text-orange">Restaurant Partner Portal</span>
+                      </div>
+                      <h1 className="display-5 fw-bold text-dark mb-3">
+                        Welcome Back, <span className="text-warning">Partner!</span>
+                      </h1>
+                      <p className="lead text-muted">Sign in to manage orders, grow sales, and delight customers.</p>
                     </div>
-                    <button 
-                      type="button" 
-                      className="btn btn-link p-0 text-decoration-none"
-                      onClick={() => setShowForgotPassword(true)}
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
 
-                  {/* Forgot Password Form */}
-                  {showForgotPassword && (
-                    <div className="alert alert-info mb-3">
-                      <h6>Reset Password</h6>
-                      <p className="mb-2">Enter your email to receive a password reset link.</p>
-                      <div className="d-flex gap-2">
-                        <input
-                          type="email"
-                          className="form-control"
-                          placeholder="Your email"
-                          value={formData.email}
-                          onChange={handleChange}
-                        />
-                        <button 
-                          type="button"
-                          className="btn btn-outline-primary"
-                          onClick={handleForgotPassword}
-                          disabled={loading}
-                        >
-                          Send Reset Link
-                        </button>
-                        <button 
-                          type="button"
-                          className="btn btn-outline-secondary"
-                          onClick={() => setShowForgotPassword(false)}
-                        >
-                          Cancel
-                        </button>
+                    <div className="card border-0 shadow card-hover mb-3">
+                      <div className="card-body p-4">
+                        <h5 className="text-warning fw-bold mb-3">
+                          <i className="bi bi-bell-fill me-2"></i> What’s New?
+                        </h5>
+                        <ul className="list-unstyled small">
+                          <li className="mb-2"><i className="bi bi-star-fill text-warning me-2"></i> <strong>Live Order Tracking</strong></li>
+                          <li className="mb-2"><i className="bi bi-graph-up-arrow text-success me-2"></i> <strong>Daily Sales Reports</strong></li>
+                          <li className="mb-2"><i className="bi bi-gift-fill text-danger me-2"></i> <strong>Free Promotions</strong></li>
+                        </ul>
                       </div>
                     </div>
-                  )}
 
-                  {/* Submit Error */}
-                  {errors.submit && (
-                    <div className="alert alert-danger">
-                      {errors.submit}
+                    <div className="alert alert-success border-0 text-center">
+                      <i className="bi bi-shield-check me-2"></i>
+                      <strong>Trusted by 10,000+ Restaurants</strong>
                     </div>
-                  )}
-
-                  {/* Important Notice */}
-                  <div className="alert alert-warning">
-                    <small>
-                      <strong>Admin Login:</strong> Use your Firebase Auth credentials, not the config password.
-                    </small>
                   </div>
+                </div>
 
-                  {/* Submit Button */}
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="btn btn-primary w-100 py-2 mb-3"
-                  >
-                    {loading ? (
-                      <>
-                        <span className="spinner-border spinner-border-sm me-2" />
-                        Signing In...
-                      </>
-                    ) : (
-                      'Sign In to Account'
-                    )}
-                  </button>
+                {/* Right: Login Form */}
+                <div className="col-lg-7">
+                  <div className="card shadow-lg border-0">
+                    <div className="card-body p-5">
 
-                  {/* Register Link */}
-                  <div className="text-center">
-                    <p className="text-muted">
-                      New to our platform?{' '}
-                      <Link href="/register" className="text-decoration-none fw-semibold">
-                        Register as Vendor
-                      </Link>
-                    </p>
+                      {/* Success Message */}
+                      {message && (
+                        <div className="alert alert-success text-center mb-4">
+                          {message}
+                        </div>
+                      )}
+
+                      <div className="text-center mb-4">
+                        <h3 className="fw-bold text-dark">Sign In to Your Account</h3>
+                        <p className="text-muted">Enter your credentials below</p>
+                      </div>
+
+                      {/* Vendor Notice */}
+                      <div className="alert alert-info border-0 mb-4">
+                        <i className="bi bi-info-circle-fill me-2"></i>
+                        <strong>Vendor Login:</strong> Use the email & password from registration.
+                      </div>
+
+                      <form onSubmit={handleSubmit}>
+                        <div className="mb-3">
+                          <label className="form-label fw-semibold">Email Address *</label>
+                          <input
+                            name="email" type="email" value={formData.email} onChange={handleChange}
+                            className={`form-control form-control-lg ${errors.email ? 'is-invalid' : ''}`}
+                            placeholder="Ex. restaurant@example.com"
+                          />
+                          {errors.email && <div className="invalid-feedback">{errors.email}</div>}
+                        </div>
+
+                        <div className="mb-3">
+                          <label className="form-label fw-semibold">Password *</label>
+                          <input
+                            name="password" type="password" value={formData.password} onChange={handleChange}
+                            className={`form-control form-control-lg ${errors.password ? 'is-invalid' : ''}`}
+                            placeholder="Ex. ••••••••"
+                          />
+                          {errors.password && <div className="invalid-feedback">{errors.password}</div>}
+                        </div>
+
+                        <div className="d-flex justify-content-between align-items-center mb-4">
+                          <div className="form-check">
+                            <input id="remember" type="checkbox" className="form-check-input" />
+                            <label htmlFor="remember" className="form-check-label">Remember me</label>
+                          </div>
+                          <button type="button" className="btn btn-link p-0 text-decoration-none text-orange fw-semibold"
+                            onClick={() => setShowForgotPassword(true)}>
+                            Forgot password?
+                          </button>
+                        </div>
+
+                        {/* Forgot Password */}
+                        {showForgotPassword && (
+                          <div className="alert alert-light border mb-4 p-3">
+                            <p className="mb-2 fw-semibold">Reset Your Password</p>
+                            <div className="d-flex gap-2">
+                              <input
+                                type="email" className="form-control" placeholder="Your email"
+                                value={formData.email} onChange={handleChange}
+                              />
+                              <button type="button" className="btn btn-outline-warning px-3"
+                                onClick={handleForgotPassword} disabled={loading}>
+                                Send Link
+                              </button>
+                              <button type="button" className="btn btn-outline-secondary px-3"
+                                onClick={() => setShowForgotPassword(false)}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {errors.submit && <div className="alert alert-danger">{errors.submit}</div>}
+
+                        <button
+                          type="submit" disabled={loading}
+                          className="btn btn-warning btn-lg w-100 py-3 rounded-pill fw-bold d-flex align-items-center justify-content-center gap-2 shadow-sm"
+                        >
+                          {loading ? (
+                            <>
+                              <span className="spinner-border spinner-border-sm"></span>
+                              Signing In...
+                            </>
+                          ) : (
+                            <>
+                              Sign In <i className="bi bi-box-arrow-in-right"></i>
+                            </>
+                          )}
+                        </button>
+
+                        <div className="text-center mt-4">
+                          <p className="text-muted">
+                            New restaurant?{' '}
+                            <Link href="/register" className="text-warning fw-bold text-decoration-none">
+                              Register as Vendor
+                            </Link>
+                          </p>
+                        </div>
+                      </form>
+
+                      {/* Admin Note */}
+                      <div className="mt-4 p-3 bg-light rounded small text-center">
+                        <strong>Admin Login:</strong> Use Firebase Auth credentials.
+                      </div>
+                    </div>
                   </div>
-                </form>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

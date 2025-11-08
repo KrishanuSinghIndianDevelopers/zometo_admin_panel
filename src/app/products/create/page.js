@@ -29,13 +29,12 @@ export default function CreateProduct() {
   const [nestedSubCategories, setNestedSubCategories] = useState([]);
   const [availableProducts, setAvailableProducts] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
-  const [vendorUid, setVendorUid] = useState(null); // ✅ ADDED: Store vendor UID separately
+  const [vendorUid, setVendorUid] = useState(null);
 
-  // Status options
+  // ✅ UPDATED: Status options - removed "cancelled"
   const statusOptions = [
-    { value: 'upcoming', label: '🟡 Upcoming', color: 'warning' },
-    { value: 'available', label: '🟢 Available', color: 'success' },
-    { value: 'cancelled', label: '🔴 Cancelled', color: 'danger' }
+    { value: 'Not Available', label: 'Not Available', color: 'warning' },
+    { value: 'available', label: 'Available', color: 'success' }
   ];
 
   // Form states
@@ -48,12 +47,13 @@ export default function CreateProduct() {
     subCategoryName: '',
     nestedSubCategoryId: '',
     nestedSubCategoryName: '',
-    amount: '',
+    sellingPrice: '', // ✅ CHANGED: amount → sellingPrice
     originalPrice: '',
     discountedAmount: '',
     foodType: 'veg',
     size: '',
     unit: '',
+    customUnit: '',
     quantity: '',
     priority: '',
     status: 'available',
@@ -71,6 +71,7 @@ export default function CreateProduct() {
     { value: 'non-veg', label: '🍗 Non-Vegetarian' }
   ];
 
+  // ✅ UPDATED: Units - added "any" option
   const units = [
     { value: '', label: 'None' },
     { value: 'kg', label: 'Kilogram (kg)' },
@@ -79,7 +80,8 @@ export default function CreateProduct() {
     { value: 'ml', label: 'Milliliter (ml)' },
     { value: 'piece', label: 'Piece' },
     { value: 'pack', label: 'Pack' },
-    { value: 'bottle', label: 'Bottle' }
+    { value: 'bottle', label: 'Bottle' },
+    { value: 'any', label: 'Any (custom)' } // ✅ ADDED: Any option
   ];
 
   const sizes = [
@@ -100,7 +102,7 @@ export default function CreateProduct() {
     { value: 'bxgyf', label: 'Buy X Get Y Free (Different Product)' }
   ];
 
-  // ✅ FIXED: Helper function to generate offer text
+  // Helper function to generate offer text
   const generateOfferText = (data) => {
     switch(data.offerType) {
       case 'bogo':
@@ -120,7 +122,6 @@ export default function CreateProduct() {
     checkAuthAndRole();
   }, []);
 
-  // ✅ FIXED: Get vendor UID properly
   const checkAuthAndRole = async () => {
     const isLoggedIn = localStorage.getItem('isLoggedIn');
     const userData = localStorage.getItem('user');
@@ -134,17 +135,14 @@ export default function CreateProduct() {
     console.log('Current User:', userObj);
     setCurrentUser(userObj);
     
-    // ✅ CRITICAL FIX: Get vendor UID for vendors
     if (userObj.role === 'vendor') {
       await getVendorUid(userObj.email);
     }
     
-    // Load data based on user role
     fetchCategories();
     fetchAvailableProducts(userObj);
   };
 
-  // ✅ NEW: Function to get vendor UID
   const getVendorUid = async (email) => {
     try {
       const vendorsQuery = query(
@@ -155,7 +153,7 @@ export default function CreateProduct() {
       const vendorsSnapshot = await getDocs(vendorsQuery);
       if (!vendorsSnapshot.empty) {
         const vendorDoc = vendorsSnapshot.docs[0];
-        const vendorUid = vendorDoc.id; // ✅ This is the correct vendor UID
+        const vendorUid = vendorDoc.id;
         const vendorData = vendorDoc.data();
         
         console.log('✅ Vendor UID found:', vendorUid);
@@ -181,7 +179,6 @@ export default function CreateProduct() {
       );
       setFilteredCategories(filtered);
       
-      // Reset category if current selection doesn't match food type
       if (formData.categoryId) {
         const currentCategory = categories.find(cat => cat.id === formData.categoryId);
         if (currentCategory && currentCategory.foodType !== formData.foodType) {
@@ -201,11 +198,11 @@ export default function CreateProduct() {
     }
   }, [formData.foodType, categories]);
 
-  // Calculate discounted amount when prices change
+  // ✅ UPDATED: Calculate discounted amount when prices change
   useEffect(() => {
-    if (formData.originalPrice && formData.amount) {
+    if (formData.originalPrice && formData.sellingPrice) {
       const original = parseFloat(formData.originalPrice);
-      const selling = parseFloat(formData.amount);
+      const selling = parseFloat(formData.sellingPrice);
       const discounted = original - selling;
       setFormData(prev => ({
         ...prev,
@@ -217,7 +214,7 @@ export default function CreateProduct() {
         discountedAmount: '0'
       }));
     }
-  }, [formData.originalPrice, formData.amount]);
+  }, [formData.originalPrice, formData.sellingPrice]);
 
   // Reset offer fields when offer type changes to 'none'
   useEffect(() => {
@@ -233,7 +230,6 @@ export default function CreateProduct() {
     }
   }, [formData.offerType]);
 
-  // ✅ FIXED: Direct Firebase fetch for categories
   const fetchCategories = async () => {
     try {
       const q = query(collection(db, 'categories'), where('isMainCategory', '==', true));
@@ -250,17 +246,14 @@ export default function CreateProduct() {
     }
   };
 
-  // ✅ FIXED: Direct Firebase fetch for available products
   const fetchAvailableProducts = async (userObj) => {
     try {
       let q;
       
       if (userObj.role === 'main_admin' || userObj.role === 'admin') {
-        // Admin can see all available products
         q = query(collection(db, 'products'), where('status', '==', 'available'));
         console.log("Fetching all products for admin");
       } else {
-        // Vendor - use the vendorUid we already fetched
         if (vendorUid) {
           q = query(
             collection(db, 'products'), 
@@ -288,14 +281,12 @@ export default function CreateProduct() {
     }
   };
 
-  // ✅ FIXED: Update available products when vendorUid changes
   useEffect(() => {
     if (currentUser && vendorUid) {
       fetchAvailableProducts(currentUser);
     }
   }, [vendorUid]);
 
-  // ✅ FIXED: Direct Firebase fetch for subcategories
   const fetchSubCategories = async (parentId, level = 0) => {
     try {
       const q = query(collection(db, 'categories'), where('parentCategory', '==', parentId));
@@ -325,7 +316,6 @@ export default function CreateProduct() {
     const { name, value } = e.target;
     
     if (name === 'categoryId') {
-      // When category changes, update both ID and name
       const selectedCategory = categories.find(cat => cat.id === value);
       setFormData(prev => ({
         ...prev,
@@ -345,7 +335,6 @@ export default function CreateProduct() {
       }
     }
     else if (name === 'subCategoryId') {
-      // When subcategory changes, update both ID and name
       const selectedSubCategory = subCategories.find(subCat => subCat.id === value);
       setFormData(prev => ({
         ...prev,
@@ -362,7 +351,6 @@ export default function CreateProduct() {
       }
     }
     else if (name === 'nestedSubCategoryId') {
-      // When nested subcategory changes, update both ID and name
       const selectedNestedSubCategory = nestedSubCategories.find(nestedCat => nestedCat.id === value);
       setFormData(prev => ({
         ...prev,
@@ -371,7 +359,6 @@ export default function CreateProduct() {
       }));
     }
     else if (name === 'offerType') {
-      // When offer type changes, auto-generate description
       setFormData(prev => {
         const newData = {
           ...prev,
@@ -384,7 +371,6 @@ export default function CreateProduct() {
       });
     }
     else if (name === 'buyX' || name === 'getY') {
-      // When buyX or getY changes, update offer description
       setFormData(prev => {
         const newData = {
           ...prev,
@@ -397,7 +383,6 @@ export default function CreateProduct() {
       });
     }
     else {
-      // For all other fields
       setFormData(prev => ({
         ...prev,
         [name]: value
@@ -408,15 +393,13 @@ export default function CreateProduct() {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
-      // Validate file type
       if (!file.type.startsWith('image/')) {
         alert('Please select an image file');
         return;
       }
       
-      // Validate file size (5MB max)
-      if (file.size > 5 * 1024 * 1024) {
-        alert('Image size must be less than 5MB');
+      if (file.size > 10 * 1024 * 1024) {
+        alert('Image size must be less than 10MB');
         return;
       }
 
@@ -425,139 +408,143 @@ export default function CreateProduct() {
     }
   };
 
-  // ✅ FIXED: Complete handleSubmit function with proper vendor UID
   const handleSubmit = async (e) => {
-    e.preventDefault();
+  e.preventDefault();
+  
+  if (!currentUser) {
+    alert('User not authenticated!');
+    return;
+  }
+
+  // Validate required fields
+  if (!formData.title || !formData.categoryId || !formData.originalPrice || !image) {
+    alert('Please fill all required fields and upload an image.');
+    return;
+  }
+
+  // Validate selling price is not greater than original price
+  if (formData.sellingPrice && parseFloat(formData.sellingPrice) > parseFloat(formData.originalPrice)) {
+    alert('Selling price cannot be greater than original price.');
+    return;
+  }
+
+  // Validate custom unit when "any" is selected
+  if (formData.unit === 'any' && !formData.customUnit) {
+    alert('Please enter a custom unit name when "Any (custom)" is selected.');
+    return;
+  }
+
+  // Validate offer fields
+  if (formData.offerType !== 'none') {
+    if ((formData.offerType === 'bxgy' || formData.offerType === 'bxgyf') && (!formData.buyX || !formData.getY)) {
+      alert('Please fill both Buy Quantity and Get Free Quantity for this offer type.');
+      return;
+    }
+    if ((formData.offerType === 'bogof' || formData.offerType === 'bxgyf') && !formData.freeProductId) {
+      alert('Please select a free product for this offer type.');
+      return;
+    }
+  }
+
+  if (currentUser.role === 'vendor' && !vendorUid) {
+    alert('Vendor authentication failed. Please try logging in again.');
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    // Upload image to Firebase Storage
+    const storage = getStorage();
+    const imageRef = ref(storage, `products/${Date.now()}-${image.name}`);
+    await uploadBytes(imageRef, image);
+    const imageUrl = await getDownloadURL(imageRef);
+
+    console.log("✅ Image uploaded successfully:", imageUrl);
+
+    // Determine vendor UID and name
+    let finalVendorUid;
+    let finalVendorName;
+
+    if (currentUser.role === 'main_admin' || currentUser.role === 'admin') {
+      finalVendorUid = 'admin';
+      finalVendorName = 'Admin';
+    } else {
+      finalVendorUid = vendorUid;
+      finalVendorName = currentUser.restaurantName || currentUser.name || currentUser.email;
+      
+      console.log("✅ Using vendor UID for product:", finalVendorUid);
+      console.log("✅ Using vendor name for product:", finalVendorName);
+      
+      if (!finalVendorUid) {
+        throw new Error('Vendor UID not found. Please contact admin.');
+      }
+    }
+
+    // ✅ UPDATED: Use sellingPrice instead of amount
+    const sellingPrice = formData.sellingPrice || formData.originalPrice;
+    const discountedAmount = formData.discountedAmount || '0';
     
-    if (!currentUser) {
-      alert('User not authenticated!');
-      return;
-    }
+    // ✅ CORRECTED: Handle custom unit logic
+    const finalUnit = formData.unit === 'any' ? formData.customUnit : formData.unit;
+    
+    const productData = {
+      title: formData.title.trim(),
+      description: formData.description?.trim() || '',
+      categoryId: formData.categoryId,
+      categoryName: formData.categoryName || '',
+      subCategoryName: formData.subCategoryName || '',
+      subCategoryId: formData.subCategoryId || '',
+      nestedSubCategoryName: formData.nestedSubCategoryName || '',
+      nestedSubCategoryId: formData.nestedSubCategoryId || '',
+      sellingPrice: parseFloat(sellingPrice), // ✅ CHANGED: amount → sellingPrice
+      originalPrice: parseFloat(formData.originalPrice),
+      discountedAmount: Math.max(0, parseFloat(discountedAmount)),
+      foodType: formData.foodType || 'veg',
+      size: formData.size || '',
+      unit: finalUnit || '', // ✅ CORRECTED: Use the calculated finalUnit
+      quantity: formData.quantity ? parseFloat(formData.quantity) : null,
+      priority: parseInt(formData.priority) || 0,
+      status: formData.status || 'available',
+      // Offer fields
+      offerType: formData.offerType || 'none',
+      buyX: formData.buyX ? parseInt(formData.buyX) : null,
+      getY: formData.getY ? parseInt(formData.getY) : null,
+      freeProductId: formData.freeProductId || null,
+      maxQuantity: formData.maxQuantity ? parseInt(formData.maxQuantity) : 0,
+      offerDescription: formData.offerDescription || generateOfferText(formData),
+      // Vendor information
+      vendorId: finalVendorUid,
+      vendorName: finalVendorName,
+      createdBy: currentUser.role || 'vendor',
+      imageUrl: imageUrl,
+      timestamp: Timestamp.now(),
+    };
 
-    // Validate required fields
-    if (!formData.title || !formData.categoryId || !formData.originalPrice || !image) {
-      alert('Please fill all required fields and upload an image.');
-      return;
-    }
+    console.log('✅ Final product data to save:', productData);
 
-    // Validate selling price is not greater than original price
-    if (formData.amount && parseFloat(formData.amount) > parseFloat(formData.originalPrice)) {
-      alert('Selling price cannot be greater than original price.');
-      return;
-    }
-
-    // Validate offer fields
-    if (formData.offerType !== 'none') {
-      if ((formData.offerType === 'bxgy' || formData.offerType === 'bxgyf') && (!formData.buyX || !formData.getY)) {
-        alert('Please fill both Buy Quantity and Get Free Quantity for this offer type.');
-        return;
+    // Remove empty fields
+    Object.keys(productData).forEach(key => {
+      if (productData[key] === '' || productData[key] === null || productData[key] === undefined) {
+        delete productData[key];
       }
-      if ((formData.offerType === 'bogof' || formData.offerType === 'bxgyf') && !formData.freeProductId) {
-        alert('Please select a free product for this offer type.');
-        return;
-      }
-    }
+    });
 
-    // ✅ CRITICAL FIX: Validate vendor UID for vendors
-    if (currentUser.role === 'vendor' && !vendorUid) {
-      alert('Vendor authentication failed. Please try logging in again.');
-      return;
-    }
+    console.log('✅ Creating product with data:', productData);
 
-    setLoading(true);
-
-    try {
-      // Upload image to Firebase Storage
-      const storage = getStorage();
-      const imageRef = ref(storage, `products/${Date.now()}-${image.name}`);
-      await uploadBytes(imageRef, image);
-      const imageUrl = await getDownloadURL(imageRef);
-
-      console.log("✅ Image uploaded successfully:", imageUrl);
-
-      // ✅ CRITICAL FIX: Determine vendor UID and name
-      let finalVendorUid;
-      let finalVendorName;
-
-      if (currentUser.role === 'main_admin' || currentUser.role === 'admin') {
-        finalVendorUid = 'admin';
-        finalVendorName = 'Admin';
-      } else {
-        // Use the vendorUid we already fetched
-        finalVendorUid = vendorUid;
-        finalVendorName = currentUser.restaurantName || currentUser.name || currentUser.email;
-        
-        console.log("✅ Using vendor UID for product:", finalVendorUid);
-        console.log("✅ Using vendor name for product:", finalVendorName);
-        
-        if (!finalVendorUid) {
-          throw new Error('Vendor UID not found. Please contact admin.');
-        }
-      }
-
-      // Prepare product data with vendor information
-      const sellingPrice = formData.amount || formData.originalPrice;
-      const discountedAmount = formData.discountedAmount || '0';
-      
-      const productData = {
-        title: formData.title.trim(),
-        description: formData.description?.trim() || '',
-        categoryId: formData.categoryId,
-        categoryName: formData.categoryName || '',
-        subCategoryName: formData.subCategoryName || '',
-        subCategoryId: formData.subCategoryId || '',
-        nestedSubCategoryName: formData.nestedSubCategoryName || '',
-        nestedSubCategoryId: formData.nestedSubCategoryId || '',
-        amount: parseFloat(sellingPrice),
-        originalPrice: parseFloat(formData.originalPrice),
-        discountedAmount: Math.max(0, parseFloat(discountedAmount)),
-        foodType: formData.foodType || 'veg',
-        size: formData.size || '',
-        unit: formData.unit || '',
-        quantity: formData.quantity ? parseFloat(formData.quantity) : null,
-        priority: parseInt(formData.priority) || 0,
-        status: formData.status || 'available',
-        // Offer fields
-        offerType: formData.offerType || 'none',
-        buyX: formData.buyX ? parseInt(formData.buyX) : null,
-        getY: formData.getY ? parseInt(formData.getY) : null,
-        freeProductId: formData.freeProductId || null,
-        maxQuantity: formData.maxQuantity ? parseInt(formData.maxQuantity) : 0,
-        offerDescription: formData.offerDescription || generateOfferText(formData),
-        // ✅ CRITICAL: Make sure vendorId is included
-        vendorId: finalVendorUid, // This should be the document ID like "5Z4mCl2PKpzS9fr3lTSG"
-        vendorName: finalVendorName, // "Chandu ka Dabha"
-        createdBy: currentUser.role || 'vendor',
-        imageUrl: imageUrl,
-        timestamp: Timestamp.now(),
-      };
-
-      console.log('✅ Final product data to save:', productData);
-      console.log('✅ vendorId in product data:', productData.vendorId);
-      console.log('✅ vendorName in product data:', productData.vendorName);
-
-      // Remove empty fields
-      Object.keys(productData).forEach(key => {
-        if (productData[key] === '' || productData[key] === null || productData[key] === undefined) {
-          delete productData[key];
-        }
-      });
-
-      console.log('✅ Creating product with data:', productData);
-
-      // Save to Firestore
-      const docRef = await addDoc(collection(db, 'products'), productData);
-      
-      console.log('✅ Product created with ID:', docRef.id);
-      alert('Product created successfully!');
-      router.push('/products');
-    } catch (error) {
-      console.error('❌ Error creating product:', error);
-      alert('Failed to create product! ' + error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+    // Save to Firestore
+    const docRef = await addDoc(collection(db, 'products'), productData);
+    
+    console.log('✅ Product created with ID:', docRef.id);
+    alert('Product created successfully!');
+    router.push('/products');
+  } catch (error) {
+    console.error('❌ Error creating product:', error);
+    alert('Failed to create product! ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const resetForm = () => {
     setFormData({
@@ -569,12 +556,13 @@ export default function CreateProduct() {
       subCategoryId: '',
       nestedSubCategoryName: '',
       nestedSubCategoryId: '',
-      amount: '',
+      sellingPrice: '', // ✅ CHANGED: amount → sellingPrice
       originalPrice: '',
       discountedAmount: '0',
       foodType: 'veg',
       size: '',
       unit: '',
+       customUnit: '',
       quantity: '',
       priority: '5',
       status: 'available',
@@ -642,15 +630,6 @@ export default function CreateProduct() {
           </div>
         </div>
 
-        {/* Debug Info */}
-        <div className="p-3 bg-warning bg-opacity-10">
-          <small className="text-muted">
-            <strong>Vendor UID Debug:</strong> {vendorUid ? `✅ UID: ${vendorUid}` : '❌ Not loaded'} | 
-            Role: {currentUser.role} | Name: {currentUser.name} | Email: {currentUser.email}
-          </small>
-        </div>
-
-
         {/* Form Content */}
         <div className="p-4">
           <div className="card border-0 shadow-lg rounded-4">
@@ -670,7 +649,7 @@ export default function CreateProduct() {
                       </tr>
                     </thead>
                     <tbody>
-                      {/* Product Name (Single field) */}
+                      {/* Product Name */}
                       <tr>
                         <td className="align-middle">
                           <label className="form-label fw-medium text-dark mb-0">
@@ -832,18 +811,19 @@ export default function CreateProduct() {
                             </div>
                             <div className="col-md-4">
                               <label className="form-label fw-medium text-dark mb-1">
-                                Selling Price (₹)
+                                Selling Price (₹) *
                               </label>
                               <input
                                 type="number"
                                 className="form-control"
-                                name="amount"
-                                value={formData.amount}
+                                name="sellingPrice" // ✅ CHANGED: amount → sellingPrice
+                                value={formData.sellingPrice}
                                 onChange={handleInputChange}
                                 placeholder="0.00"
                                 step="0.01"
                                 min="0"
                                 max={formData.originalPrice || ""}
+                                required
                               />
                             </div>
                             <div className="col-md-4">
@@ -867,9 +847,9 @@ export default function CreateProduct() {
                             </div>
                           </div>
                           <small className="text-muted mt-2 d-block">
-                            {formData.amount &&
+                            {formData.sellingPrice &&
                             formData.originalPrice &&
-                            parseFloat(formData.amount) >
+                            parseFloat(formData.sellingPrice) >
                               parseFloat(formData.originalPrice) ? (
                               <span className="text-danger">
                                 Selling price cannot be more than original price
@@ -960,7 +940,7 @@ export default function CreateProduct() {
                                   <option value="">Select Free Product</option>
                                   {availableProducts.map((product) => (
                                     <option key={product.id} value={product.id}>
-                                      {product.title} - ₹{product.amount}
+                                      {product.title} - ₹{product.sellingPrice || product.amount}
                                     </option>
                                   ))}
                                 </select>
@@ -1027,66 +1007,83 @@ export default function CreateProduct() {
                         </td>
                       </tr>
 
-                      {/* Product Details */}
-                      <tr>
-                        <td className="align-middle">
-                          <label className="form-label fw-medium text-dark mb-0">
-                            Product Details
-                          </label>
-                        </td>
-                        <td>
-                          <div className="row">
-                            <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">
-                                Size
-                              </label>
-                              <select
-                                className="form-select"
-                                name="size"
-                                value={formData.size}
-                                onChange={handleInputChange}
-                              >
-                                {sizes.map((size) => (
-                                  <option key={size.value} value={size.value}>
-                                    {size.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">
-                                Unit
-                              </label>
-                              <select
-                                className="form-select"
-                                name="unit"
-                                value={formData.unit}
-                                onChange={handleInputChange}
-                              >
-                                {units.map((unit) => (
-                                  <option key={unit.value} value={unit.value}>
-                                    {unit.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="col-md-4">
-                              <label className="form-label fw-medium text-dark mb-1">
-                                Quantity
-                              </label>
-                              <input
-                                type="number"
-                                className="form-control"
-                                name="quantity"
-                                value={formData.quantity}
-                                onChange={handleInputChange}
-                                placeholder="e.g., 2, 500"
-                                step="0.01"
-                              />
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
+{/* Product Details */}
+<tr>
+  <td className="align-middle">
+    <label className="form-label fw-medium text-dark mb-0">
+      Product Details
+    </label>
+  </td>
+  <td>
+    <div className="row">
+      <div className="col-md-4">
+        <label className="form-label fw-medium text-dark mb-1">
+          Size
+        </label>
+        <select
+          className="form-select"
+          name="size"
+          value={formData.size}
+          onChange={handleInputChange}
+        >
+          {sizes.map((size) => (
+            <option key={size.value} value={size.value}>
+              {size.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="col-md-4">
+        <label className="form-label fw-medium text-dark mb-1">
+          Unit
+        </label>
+        <select
+          className="form-select"
+          name="unit"
+          value={formData.unit}
+          onChange={handleInputChange}
+        >
+          {units.map((unit) => (
+            <option key={unit.value} value={unit.value}>
+              {unit.label}
+            </option>
+          ))}
+        </select>
+        
+        {/* Custom Unit Input - Show only when "any" is selected */}
+        {formData.unit === 'any' && (
+          <div className="mt-2">
+            <label className="form-label fw-medium text-dark mb-1">
+              Custom Unit Name
+            </label>
+            <input
+              type="text"
+              className="form-control"
+              name="customUnit"
+              value={formData.customUnit || ''}
+              onChange={handleInputChange}
+              placeholder="Enter custom unit (e.g., bowl, plate, box)"
+            />
+          </div>
+        )}
+      </div>
+      <div className="col-md-4">
+        <label className="form-label fw-medium text-dark mb-1">
+          Quantity
+        </label>
+        <input
+          type="number"
+          className="form-control"
+          name="quantity"
+          value={formData.quantity}
+          onChange={handleInputChange}
+          placeholder="e.g., 2, 500"
+          step="0.01"
+        />
+      </div>
+    </div>
+  </td>
+</tr>
 
                       {/* Priority & Status */}
                       <tr>
@@ -1175,7 +1172,7 @@ export default function CreateProduct() {
                                   Click to upload product image
                                 </h6>
                                 <p className="text-muted mb-0 small">
-                                  PNG, JPG, WEBP up to 5MB
+                                  PNG, JPG, WEBP up to 10MB
                                 </p>
                               </div>
                             </label>
@@ -1215,14 +1212,6 @@ export default function CreateProduct() {
                   >
                     Reset Form
                   </button>
-
-                  {/* Debug Info */}
-                  <div className="p-3 bg-warning bg-opacity-10">
-                    <small className="text-muted">
-                      <strong>Vendor UID Debug:</strong> {currentUser.uid} |
-                      Role: {currentUser.role} | Name: {currentUser.name}
-                    </small>
-                  </div>
 
                   <button
                     type="submit"
